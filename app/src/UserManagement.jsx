@@ -38,7 +38,7 @@ export function UserManagement() {
       body: JSON.stringify(changes),
     });
     const payload = await response.json();
-    const requestError = response.ok ? null : new Error(payload?.error || "??????");
+    const requestError = response.ok ? null : new Error(payload?.error || "更新用户失败");
     if (requestError) {
       setUsers(previous);
       setError(requestError.message);

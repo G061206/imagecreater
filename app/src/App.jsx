@@ -236,7 +236,7 @@ function PromptPanel({ models, onGenerated }) {
 
   async function generate() {
     if (!prompt.trim()) {
-      setError("??????????");
+      setError("先写下你想生成的画面");
       return;
     }
     setStatus("loading");
@@ -244,7 +244,7 @@ function PromptPanel({ models, onGenerated }) {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      if (!token) throw new Error("?????????????");
+      if (!token) throw new Error("登录状态已失效，请重新登录");
       const response = await fetch("/api/generations", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -260,9 +260,9 @@ function PromptPanel({ models, onGenerated }) {
         }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || `???? (${response.status})`);
+      if (!response.ok) throw new Error(payload?.error || `请求失败 (${response.status})`);
       const imageUrl = payload.assets?.[0]?.url;
-      if (!imageUrl) throw new Error("????????????????");
+      if (!imageUrl) throw new Error("生成任务完成，但没有可显示的图片");
       onGenerated({ imageUrl, prompt, model: model.name, ratio, size, quality, taskId: payload.taskId, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) });
       setStatus("success");
     } catch (requestError) {
@@ -273,7 +273,7 @@ function PromptPanel({ models, onGenerated }) {
 
   return (
     <aside className="prompt-panel">
-      <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="连接设置" onClick={() => setSettingsOpen(true)}><GearSix size={19} /></IconButton><IconButton label="更多"><DotsThree size={20} /></IconButton></div></div>
+      <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="服务端安全托管"><ShieldCheck size={19} /></IconButton><IconButton label="更多"><DotsThree size={20} /></IconButton></div></div>
       <div className="panel-scroll">
         <label className="prompt-box">
           <span>描述你的画面</span>
@@ -298,7 +298,7 @@ function PromptPanel({ models, onGenerated }) {
       </div>
       <div className="generate-footer">
         <button className="generate-button" disabled={status === "loading"} onClick={generate}>{status === "loading" ? <><span className="spinner" />正在生成</> : <><Sparkle size={18} weight="fill" />生成图像<span>{model.cost * count}</span></>}</button>
-        <p><Key size={13} />{apiKey ? "OpenRouter 已连接" : "需要连接 OpenRouter"}</p>
+        <p><ShieldCheck size={13} />OpenRouter 由服务端安全托管</p>
       </div>
     </aside>
   );
@@ -389,9 +389,9 @@ function ApiSettings() {
     }
   }
   return (
-    <div className="admin-page narrow-page"><div className="page-title"><div><p>????</p><h1>API ??</h1><span>????? VPS ?????????????????????</span></div></div>
-      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck size={20} /></span><div><h3>OpenRouter ?????</h3><p>????????? API ??????????</p></div></div><div className="settings-form"><label><span>Base URL</span><input value="https://openrouter.ai/api/v1" disabled readOnly /></label><label><span>API Key</span><div className="password-input"><input value="? OPENROUTER_API_KEY ??????" disabled readOnly /></div><small>??????? docker compose up -d app ??????</small></label><button className="button ghost test-button" onClick={test}>{testing ? <span className="spinner dark" /> : <Gauge size={17} />}{testing ? "????" : health === "ok" ? "????" : health === "error" ? "????" : "????"}</button></div></section>
-      <section className="settings-card"><div className="settings-heading"><span><SlidersHorizontal size={20} /></span><div><h3>????</h3><p>?????? REQUEST_TIMEOUT_MS ? MAX_CONCURRENT_GENERATIONS ???</p></div></div></section>
+    <div className="admin-page narrow-page"><div className="page-title"><div><p>平台配置</p><h1>API 配置</h1><span>生产密钥由 VPS 环境变量管理，浏览器和数据库均不保存明文。</span></div></div>
+      <section className="settings-card"><div className="settings-heading"><span><ShieldCheck size={20} /></span><div><h3>OpenRouter 服务端连接</h3><p>所有生成请求经同源 API 鉴权、计费和持久化。</p></div></div><div className="settings-form"><label><span>Base URL</span><input value="https://openrouter.ai/api/v1" disabled readOnly /></label><label><span>API Key</span><div className="password-input"><input value="由 OPENROUTER_API_KEY 环境变量托管" disabled readOnly /></div><small>修改密钥后执行 docker compose up -d app 使配置生效。</small></label><button className="button ghost test-button" onClick={test}>{testing ? <span className="spinner dark" /> : <Gauge size={17} />}{testing ? "正在检查" : health === "ok" ? "服务正常" : health === "error" ? "服务异常" : "检查服务"}</button></div></section>
+      <section className="settings-card"><div className="settings-heading"><span><SlidersHorizontal size={20} /></span><div><h3>运行策略</h3><p>超时和并发由 REQUEST_TIMEOUT_MS 与 MAX_CONCURRENT_GENERATIONS 控制。</p></div></div></section>
     </div>
   );
 }
