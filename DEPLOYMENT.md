@@ -1,36 +1,14 @@
-# Prism production deployment
+# Production deployment
 
-## Requirements
+完整部署指南、环境变量说明、Supabase 初始化、HTTPS、升级和排障步骤统一维护在 [README.md](README.md#vps-部署)。
 
-- A VPS with Docker Engine and the Compose plugin
-- A domain pointing to the VPS
-- Supabase project URL, publishable key, and service-role secret
-- A rotated OpenRouter API key
-
-## Configure
-
-1. Copy `app/.env.example` to `app/.env.production` and set the Supabase URL and publishable key.
-2. Copy `server/.env.example` to `server/.env` and set server-only secrets.
-3. Create a root `.env` containing `SITE_ADDRESS=images.example.com`.
-4. In Supabase Auth URL Configuration, set Site URL to the public HTTPS URL and add it to Redirect URLs.
-
-Never put the service-role secret or OpenRouter key in a `VITE_` variable. Rotate the OpenRouter key previously pasted into chat before deployment.
-
-## Deploy
+最短启动流程：
 
 ```bash
-docker compose build
+cp .env.example .env
+cp server/.env.example server/.env
+# 编辑两个文件后：
+docker compose build --pull
 docker compose up -d
-docker compose ps
-curl -fsS https://images.example.com/api/health
-```
-
-Caddy automatically provisions and renews TLS certificates after DNS resolves and ports 80/443 are reachable.
-
-## Update
-
-```bash
-docker compose build app
-docker compose up -d app
-docker compose logs --tail=200 app
+curl -fsS https://your-domain.example/api/health
 ```
