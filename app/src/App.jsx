@@ -441,9 +441,11 @@ function Canvas({ result, onClear }) {
   );
 }
 
-function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], loading = false, queueOnly = false, onSelect, onRefresh }) {
+function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], loading = false, queueOnly = false, onSelect, onRefresh, onDelete }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState(queueOnly ? "active" : "all");
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [deleting, setDeleting] = useState(false);
   const normalized = query.trim().toLowerCase();
   const visibleTasks = tasks.filter((task) => {
     const isActive = task.status === "processing" || task.status === "reserved";
@@ -451,8 +453,48 @@ function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], lo
     const matchesQuery = !normalized || (task.prompt || "").toLowerCase().includes(normalized) || (task.model_id || "").toLowerCase().includes(normalized);
     return matchesStatus && matchesQuery;
   });
+  const selectedCount = selectedIds.size;
+  const allVisibleSelected = visibleTasks.length > 0 && visibleTasks.every((task) => selectedIds.has(task.id));
   const statusLabels = { all: "\u5168\u90e8\u72b6\u6001", active: "\u961f\u5217\u4e2d", completed: "\u5df2\u5b8c\u6210", failed: "\u5931\u8d25" };
-  return <main className="collection-page"><div className="collection-head"><div><p>{"\u5de5\u4f5c\u7a7a\u95f4"}</p><h1>{title}</h1></div><button className="button primary" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u65b0\u5efa\u4f5c\u54c1"}</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></div><button onClick={() => setStatusFilter((value) => value === "all" ? "completed" : value === "completed" ? "failed" : value === "failed" ? "active" : "all")}>{statusLabels[statusFilter]}<CaretDown size={14} /></button><IconButton label="Refresh" onClick={onRefresh}><ClockCounterClockwise size={18} /></IconButton></div>{loading ? <div className="collection-empty"><span className="spinner" /><h2>{"\u6b63\u5728\u8bfb\u53d6"}</h2></div> : visibleTasks.length ? <div className="generation-list">{visibleTasks.map((task) => { const result = generationTaskToResult(task, models); const thumb = task.assets?.[0]?.url; const model = models.find((item) => item.id === task.model_id); return <button key={task.id} className="generation-card" onClick={() => thumb && onSelect?.(result)} disabled={!thumb}><span className="generation-thumb">{thumb ? <img src={thumb} alt="" /> : <Icon size={22} />}</span><div><strong>{task.prompt}</strong><span>{model?.name || task.model_id}</span><small>{task.created_at ? new Date(task.created_at).toLocaleString("zh-CN") : "-"}</small></div><b className={"task-status " + task.status}>{task.status === "completed" ? "\u6210\u529f" : task.status === "failed" ? "\u5931\u8d25" : task.status === "processing" ? "\u5904\u7406\u4e2d" : "\u6392\u961f\u4e2d"}</b></button>; })}</div> : <div className="collection-empty"><span><Icon size={28} /></span><h2>{"\u8fd9\u91cc\u8fd8\u6ca1\u6709\u5185\u5bb9"}</h2><p>{emptyText}</p><button className="button ghost" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u5f00\u59cb\u521b\u4f5c"}</button></div>}</main>;
+
+  useEffect(() => {
+    setSelectedIds((current) => new Set([...current].filter((id) => tasks.some((task) => task.id === id))));
+  }, [tasks]);
+
+  function toggleSelected(id) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleVisible() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) visibleTasks.forEach((task) => next.delete(task.id));
+      else visibleTasks.forEach((task) => next.add(task.id));
+      return next;
+    });
+  }
+
+  async function deleteSelected() {
+    if (!selectedCount || deleting) return;
+    if (!window.confirm("\u786e\u5b9a\u5220\u9664\u9009\u4e2d\u4f5c\u54c1\u5417\uff1f\u8fd9\u4f1a\u540c\u65f6\u5220\u9664\u5b58\u50a8\u4e2d\u7684\u56fe\u7247\u6587\u4ef6\u3002")) return;
+    const ids = [...selectedIds];
+    setDeleting(true);
+    try {
+      await onDelete?.(ids);
+      setSelectedIds(new Set());
+      appNotify(String(ids.length) + " item(s) deleted.");
+    } catch (error) {
+      appNotify(error.message, "error");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return <main className="collection-page"><div className="collection-head"><div><p>{"\u5de5\u4f5c\u7a7a\u95f4"}</p><h1>{title}</h1></div><button className="button primary" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u65b0\u5efa\u4f5c\u54c1"}</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></div><button onClick={() => setStatusFilter((value) => value === "all" ? "completed" : value === "completed" ? "failed" : value === "failed" ? "active" : "all")}>{statusLabels[statusFilter]}<CaretDown size={14} /></button><button disabled={!visibleTasks.length} onClick={toggleVisible}>{allVisibleSelected ? "\u53d6\u6d88\u5168\u9009" : "\u5168\u9009"}</button><button className="danger-action" disabled={!selectedCount || deleting} onClick={deleteSelected}><Trash size={14} />{deleting ? "\u5220\u9664\u4e2d" : "\u5220\u9664"}{selectedCount > 0 && <b>{selectedCount}</b>}</button><IconButton label="Refresh" onClick={onRefresh}><ClockCounterClockwise size={18} /></IconButton></div>{loading ? <div className="collection-empty"><span className="spinner" /><h2>{"\u6b63\u5728\u8bfb\u53d6"}</h2></div> : visibleTasks.length ? <div className="generation-list">{visibleTasks.map((task) => { const result = generationTaskToResult(task, models); const thumb = task.assets?.[0]?.url; const model = models.find((item) => item.id === task.model_id); const selected = selectedIds.has(task.id); return <article key={task.id} className={"generation-card " + (selected ? "selected" : "")}><button type="button" className="select-check" onClick={() => toggleSelected(task.id)} aria-label={selected ? "\u53d6\u6d88\u9009\u62e9" : "\u9009\u62e9\u4f5c\u54c1"}>{selected && <Check size={13} weight="bold" />}</button><button type="button" className="generation-open" onClick={() => thumb && onSelect?.(result)} disabled={!thumb}><span className="generation-thumb">{thumb ? <img src={thumb} alt="" /> : <Icon size={22} />}</span><div><strong>{task.prompt}</strong><span>{model?.name || task.model_id}</span><small>{task.created_at ? new Date(task.created_at).toLocaleString("zh-CN") : "-"}</small></div><b className={"task-status " + task.status}>{task.status === "completed" ? "\u6210\u529f" : task.status === "failed" ? "\u5931\u8d25" : task.status === "processing" ? "\u5904\u7406\u4e2d" : "\u6392\u961f\u4e2d"}</b></button></article>; })}</div> : <div className="collection-empty"><span><Icon size={28} /></span><h2>{"\u8fd9\u91cc\u8fd8\u6ca1\u6709\u5185\u5bb9"}</h2><p>{emptyText}</p><button className="button ghost" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u5f00\u59cb\u521b\u4f5c"}</button></div>}</main>;
 }
 
 function CreatorApp({ models }) {
@@ -461,6 +503,12 @@ function CreatorApp({ models }) {
   const [result, setResult] = useState(null);
   const [generationTasks, setGenerationTasks] = useState([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+
+  async function deleteTasks(ids) {
+    await Promise.all(ids.map((id) => fetchWithAuth(`/api/generations/${encodeURIComponent(id)}`, { method: "DELETE" })));
+    setGenerationTasks((items) => items.filter((task) => !ids.includes(task.id)));
+    setResult((current) => current && ids.includes(current.taskId) ? null : current);
+  }
 
   async function loadTasks() {
     setTasksLoading(true);
@@ -488,8 +536,8 @@ function CreatorApp({ models }) {
     <div className="creator-layout">
       <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
       {view === "create" && <><Canvas result={result} onClear={() => setResult(null)} /><PromptPanel models={models} onGenerated={generated} /></>}
-      {view === "library" && <LibraryView title="\u4f5c\u54c1\u5e93" emptyText="\u751f\u6210\u7684\u56fe\u50cf\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} />}
-      {view === "queue" && <LibraryView title="\u751f\u6210\u961f\u5217" emptyText="\u6ca1\u6709\u6392\u961f\u4e2d\u7684\u751f\u6210\u4efb\u52a1\u3002" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} />}
+      {view === "library" && <LibraryView title="\u4f5c\u54c1\u5e93" emptyText="\u751f\u6210\u7684\u56fe\u50cf\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
+      {view === "queue" && <LibraryView title="\u751f\u6210\u961f\u5217" emptyText="\u6ca1\u6709\u6392\u961f\u4e2d\u7684\u751f\u6210\u4efb\u52a1\u3002" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
     </div>
   );
 }

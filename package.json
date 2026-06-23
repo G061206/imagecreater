@@ -5,12 +5,12 @@
     "type":  "module",
     "scripts":  {
                     "dev":  "node scripts/dev.mjs",
-                    "dev:app":  "vite app --host 127.0.0.1",
-                    "build":  "vite build app",
-                    "preview":  "vite preview app --host 127.0.0.1",
+                    "dev:app":  "vite --config app/vite.config.mjs --host 127.0.0.1",
+                    "build":  "vite build --config app/vite.config.mjs",
+                    "preview":  "vite preview --config app/vite.config.mjs --host 127.0.0.1",
                     "dev:server":  "node --watch server/src/index.js",
                     "start":  "node server/src/index.js",
-                    "check":  "node --check server/src/index.js \u0026\u0026 vite build app"
+                    "check":  "node --check server/src/index.js \u0026\u0026 vite build --config app/vite.config.mjs"
                 },
     "dependencies":  {
                          "@phosphor-icons/react":  "^2.1.10",

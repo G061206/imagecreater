@@ -246,6 +246,33 @@ app.get("/api/generations", authenticate, async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+app.delete("/api/generations/:id", authenticate, async (request, response, next) => {
+  try {
+    const { data: task, error } = await supabaseAdmin
+      .from("generation_tasks")
+      .select("id,user_id,generation_assets(storage_path)")
+      .eq("id", request.params.id)
+      .eq("user_id", request.user.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!task) return response.status(404).json({ error: "Generation not found" });
+
+    const storagePaths = (task.generation_assets || []).map((asset) => asset.storage_path).filter(Boolean);
+    if (storagePaths.length) {
+      const { error: storageError } = await supabaseAdmin.storage.from("generated-images").remove(storagePaths);
+      if (storageError) throw storageError;
+    }
+
+    const { error: deleteError } = await supabaseAdmin
+      .from("generation_tasks")
+      .delete()
+      .eq("id", task.id)
+      .eq("user_id", request.user.id);
+    if (deleteError) throw deleteError;
+    return response.json({ deleted: task.id });
+  } catch (error) { return next(error); }
+});
+
 
 app.post("/api/generations", authenticate, async (request, response, next) => {
   try {
