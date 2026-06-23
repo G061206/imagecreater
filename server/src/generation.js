@@ -35,6 +35,7 @@ function providerPayload(input) {
     model: input.modelId,
     messages: [{ role: "user", content }],
     modalities: ["image", "text"],
+    max_tokens: config.OPENROUTER_MAX_TOKENS,
     image_config: { aspect_ratio: input.ratio, image_size: input.size },
     quality: input.quality === "超高清" ? "high" : input.quality === "高清" ? "medium" : "standard",
     n: input.count,

@@ -7,6 +7,7 @@ const schema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
   OPENROUTER_API_KEY: z.string().startsWith("sk-or-"),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
+  OPENROUTER_MAX_TOKENS: z.coerce.number().int().min(16).max(8192).default(1024),
   APP_URL: z.string().url().optional(),
   APP_NAME: z.string().min(1).default("Prism Image Studio"),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().min(10000).max(600000).default(180000),

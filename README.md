@@ -102,6 +102,7 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-secret
 OPENROUTER_API_KEY=sk-or-v1-your-rotated-key
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MAX_TOKENS=1024
 APP_URL=https://images.example.com
 APP_NAME=Prism Image Studio
 REQUEST_TIMEOUT_MS=180000
