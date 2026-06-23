@@ -10,7 +10,7 @@
                     "preview":  "vite preview --config app/vite.config.mjs --host 127.0.0.1",
                     "dev:server":  "node --watch server/src/index.js",
                     "start":  "node server/src/index.js",
-                    "check":  "node --check server/src/index.js \u0026\u0026 vite build --config app/vite.config.mjs"
+                    "check":  "node --check server/src/index.js \u0026\u0026 node --check server/src/generation.js \u0026\u0026 vite build --config app/vite.config.mjs"
                 },
     "dependencies":  {
                          "@phosphor-icons/react":  "^2.1.10",

@@ -407,7 +407,7 @@ function PromptPanel({ models, onGenerated }) {
         {error && <div className="inline-error"><WarningCircle size={18} /><span>{error}</span></div>}
       </div>
       <div className="generate-footer">
-        <button className="generate-button" disabled={status === "loading"} onClick={generate}>{status === "loading" ? <><span className="spinner" />正在生成</> : <><Sparkle size={18} weight="fill" />生成图像<span>{model.cost * count}</span></>}</button>
+        <button className="generate-button" disabled={status === "loading"} onClick={generate}>{status === "loading" ? <><span className="spinner" />正在生成</> : <><Sparkle size={18} weight="fill" />生成图像<span className="credit-pill">{model.cost * count}</span></>}</button>
         <p><ShieldCheck size={13} />OpenRouter 由服务端安全托管</p>
       </div>
     </aside>

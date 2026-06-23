@@ -42,10 +42,49 @@ function providerPayload(input) {
   };
 }
 
+function dataUrlFromBase64(value, mimeType = "image/png") {
+  return value ? `data:${mimeType};base64,${value}` : null;
+}
+
+function collectImageCandidates(value, output, seen = new Set()) {
+  if (!value || output.length >= 8) return;
+  if (typeof value === "string") {
+    if (new RegExp("^data:image/(?:png|jpeg|webp);base64,", "i").test(value) || new RegExp("^https?://", "i").test(value)) {
+      output.push(value);
+      return;
+    }
+    for (const match of value.matchAll(new RegExp("data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+", "gi"))) output.push(match[0]);
+    return;
+  }
+  if (typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+
+  const mimeType = value.mime_type || value.mimeType || value.media_type || value.mediaType || value.type;
+  if (typeof value.b64_json === "string") output.push(dataUrlFromBase64(value.b64_json));
+  if (typeof value.base64_json === "string") output.push(dataUrlFromBase64(value.base64_json));
+  if (typeof value.image_base64 === "string") output.push(dataUrlFromBase64(value.image_base64, new RegExp("^image/").test(mimeType) ? mimeType : "image/png"));
+  if (typeof value.data === "string" && new RegExp("^image/").test(mimeType)) output.push(dataUrlFromBase64(value.data, mimeType));
+
+  if (typeof value.url === "string") collectImageCandidates(value.url, output, seen);
+  if (typeof value.image_url === "string") collectImageCandidates(value.image_url, output, seen);
+  if (value.image_url?.url) collectImageCandidates(value.image_url.url, output, seen);
+  if (value.source?.data && new RegExp("^image/").test(value.source?.media_type || "")) output.push(dataUrlFromBase64(value.source.data, value.source.media_type));
+
+  for (const key of ["data", "images", "content", "image", "output_image", "generated_image", "result"]) {
+    if (value[key] && !(typeof value[key] === "string" && key === "data")) collectImageCandidates(value[key], output, seen);
+  }
+}
+
 function collectImages(payload) {
-  const message = payload?.choices?.[0]?.message;
-  const candidates = [...(message?.images || []), ...(Array.isArray(message?.content) ? message.content : [])];
-  return candidates.map((item) => typeof item === "string" ? item : item?.image_url?.url || item?.url || null).filter(Boolean);
+  const images = [];
+  collectImageCandidates(payload?.data, images);
+  for (const choice of payload?.choices || []) {
+    collectImageCandidates(choice?.message?.images, images);
+    collectImageCandidates(choice?.message?.content, images);
+    collectImageCandidates(choice?.message, images);
+  }
+  collectImageCandidates(payload?.images, images);
+  return [...new Set(images.filter(Boolean))];
 }
 
 function decodeDataUrl(value) {
