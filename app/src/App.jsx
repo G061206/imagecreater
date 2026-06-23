@@ -102,12 +102,95 @@ function readStorage(key, fallback) {
   }
 }
 
-function IconButton({ label, children, className = "", onClick }) {
+function appNotify(message, type = "info") {
+  window.dispatchEvent(new CustomEvent("prism:notify", { detail: { message, type } }));
+}
+
+function IconButton({ label, children, className = "", onClick, disabled = false }) {
+  const handleClick = onClick || (() => appNotify(label));
   return (
-    <button className={`icon-button ${className}`} aria-label={label} title={label} onClick={onClick}>
+    <button className={`icon-button ${className}`} aria-label={label} title={label} onClick={handleClick} disabled={disabled}>
       {children}
     </button>
   );
+}
+
+function Toast({ toast, onClose }) {
+  if (!toast) return null;
+  return <button className={"toast " + (toast.type || "info")} onClick={onClose}>{toast.message}</button>;
+}
+
+
+async function fetchWithAuth(path, options = {}) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new Error("\u767b\u5f55\u72b6\u6001\u5df2\u5931\u6548");
+  const response = await fetch(path, {
+    ...options,
+    headers: { ...(options.headers || {}), Authorization: "Bearer " + token },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || "Request failed (" + response.status + ")");
+  return payload;
+}
+
+function formatInteger(value) {
+  return new Intl.NumberFormat("zh-CN").format(Number(value) || 0);
+}
+
+function formatMoney(value) {
+  return "$" + (Number(value) || 0).toFixed(2);
+}
+
+function trendLabel(value) {
+  const number = Number(value) || 0;
+  if (number > 0) return "\u2191 " + number + "% \u8f83\u6628\u65e5";
+  if (number < 0) return "\u2193 " + Math.abs(number) + "% \u8f83\u6628\u65e5";
+  return "\u4e0e\u6628\u65e5\u6301\u5e73";
+}
+
+function csvCell(value) {
+  return '"' + String(value ?? "").replaceAll('"', '""') + '"';
+}
+
+function exportCsv(filename, headers, rows) {
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function readReferenceFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function generationTaskToResult(task, models) {
+  const asset = task.assets?.[0];
+  const parameters = task.parameters || {};
+  const model = models.find((item) => item.id === task.model_id);
+  return {
+    assets: task.assets || [],
+    imageUrl: asset?.url,
+    prompt: task.prompt,
+    model: model?.name || task.model_id,
+    ratio: parameters.ratio || "-",
+    size: parameters.size || "-",
+    quality: parameters.quality || "-",
+    taskId: task.id,
+    creditCost: task.credit_cost,
+    createdAt: task.created_at ? new Date(task.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "-",
+  };
 }
 
 function Brand() {
@@ -157,9 +240,9 @@ function Header({ isAdmin, onAdmin, onCreator, role, profile, user, onSignOut, o
         </label>
       )}
       <div className="top-actions">
-        <IconButton label="帮助"><Question size={20} /></IconButton>
-        <IconButton label="通知"><Bell size={20} /><i className="notification-dot" /></IconButton>
-        <button className="credits"><Coins size={16} weight="fill" /><span>1,280</span></button>
+        <IconButton label="帮助" onClick={() => appNotify("Help is available in README.md and the API settings page.")}><Question size={20} /></IconButton>
+        <IconButton label="通知" onClick={() => appNotify("No new notifications.")}><Bell size={20} /><i className="notification-dot" /></IconButton>
+        <button className="credits" onClick={() => setSettingsOpen(true)}><Coins size={16} weight="fill" /><span>{profile?.credits ?? 0}</span></button>
         <button className="account-trigger" onClick={() => setAccountOpen((value) => !value)}>
           <span className="role-chip">{role === "admin" ? "ADMIN" : "PRO"}</span>
           <span className="avatar">{initial}</span>
@@ -172,25 +255,19 @@ function Header({ isAdmin, onAdmin, onCreator, role, profile, user, onSignOut, o
   );
 }
 
-function CreatorSidebar({ view, setView, collapsed, setCollapsed }) {
+function CreatorSidebar({ view, setView, collapsed, setCollapsed, queueCount = 0 }) {
   return (
-    <aside className={`creator-sidebar ${collapsed ? "collapsed" : ""}`}>
+    <aside className={"creator-sidebar " + (collapsed ? "collapsed" : "")}>
       <div className="side-main">
-        <button className="new-button" onClick={() => setView("create")}><Plus size={19} /><span>新建作品</span></button>
+        <button className="new-button" onClick={() => setView("create")}><Plus size={19} /><span>{"\u65b0\u5efa\u4f5c\u54c1"}</span></button>
         <nav>
           {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span>{id === "queue" && <b>2</b>}</button>
+            <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span>{id === "queue" && queueCount > 0 && <b>{queueCount}</b>}</button>
           ))}
-        </nav>
-        <div className="side-section-label">项目</div>
-        <nav>
-          <button><Layout size={19} /><span>品牌视觉</span></button>
-          <button><ImageIcon size={19} /><span>电商素材</span></button>
         </nav>
       </div>
       <div className="side-bottom">
-        <button><Trash size={19} /><span>回收站</span></button>
-        <button onClick={() => setCollapsed((value) => !value)}>{collapsed ? <ArrowRight size={19} /> : <ArrowLeft size={19} />}<span>收起</span></button>
+        <button onClick={() => setCollapsed((value) => !value)}>{collapsed ? <ArrowRight size={19} /> : <ArrowLeft size={19} />}<span>{"\u6536\u8d77"}</span></button>
       </div>
     </aside>
   );
@@ -222,6 +299,7 @@ function PromptPanel({ models, onGenerated }) {
   const [size, setSize] = useState(model.sizes[0]);
   const [quality, setQuality] = useState(model.qualities[0]);
   const [count, setCount] = useState(1);
+  const [referenceImages, setReferenceImages] = useState([]);
   const [advanced, setAdvanced] = useState(false);
   const [seed, setSeed] = useState("");
   const [negative, setNegative] = useState("");
@@ -233,6 +311,26 @@ function PromptPanel({ models, onGenerated }) {
     setSize(model.sizes[0]);
     setQuality(model.qualities[0]);
   }, [model.id]);
+
+  useEffect(() => {
+    function applyPrompt(event) {
+      setPrompt(event.detail || "");
+      appNotify("Prompt inserted into the editor.");
+    }
+    window.addEventListener("prism:set-prompt", applyPrompt);
+    return () => window.removeEventListener("prism:set-prompt", applyPrompt);
+  }, [setPrompt]);
+
+  async function loadReferenceImages(event) {
+    const files = Array.from(event.target.files || []).slice(0, 4);
+    try {
+      const images = await Promise.all(files.map(readReferenceFile));
+      setReferenceImages(images);
+      appNotify(String(images.length) + " reference image(s) loaded.");
+    } catch (readError) {
+      setError(readError.message);
+    }
+  }
 
   async function generate() {
     if (!prompt.trim()) {
@@ -255,15 +353,16 @@ function PromptPanel({ models, onGenerated }) {
           size,
           quality,
           count,
+          referenceImages,
           negativePrompt: negative,
           ...(seed ? { seed: Number(seed) } : {}),
         }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.error || `请求失败 (${response.status})`);
-      const imageUrl = payload.assets?.[0]?.url;
-      if (!imageUrl) throw new Error("生成任务完成，但没有可显示的图片");
-      onGenerated({ imageUrl, prompt, model: model.name, ratio, size, quality, taskId: payload.taskId, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) });
+      const assets = Array.isArray(payload.assets) ? payload.assets.filter((asset) => asset?.url) : [];
+      if (!assets.length) throw new Error("生成任务完成，但没有可显示的图片");
+      onGenerated({ assets, imageUrl: assets[0].url, prompt, model: model.name, ratio, size, quality, taskId: payload.taskId, creditCost: payload.creditCost, creditsRemaining: payload.creditsRemaining, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) });
       setStatus("success");
     } catch (requestError) {
       setError(requestError.message);
@@ -273,12 +372,12 @@ function PromptPanel({ models, onGenerated }) {
 
   return (
     <aside className="prompt-panel">
-      <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="服务端安全托管"><ShieldCheck size={19} /></IconButton><IconButton label="更多"><DotsThree size={20} /></IconButton></div></div>
+      <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="服务端安全托管" onClick={() => appNotify("Secrets are kept on the server side.")}><ShieldCheck size={19} /></IconButton><IconButton label="更多"><DotsThree size={20} /></IconButton></div></div>
       <div className="panel-scroll">
         <label className="prompt-box">
           <span>描述你的画面</span>
           <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="例如：雨后的东京街头，霓虹灯倒映在湿润路面上，电影感构图…" />
-          <div className="prompt-tools"><button><Plus size={17} />参考图</button><span>{prompt.length} / 2000</span></div>
+          <div className="prompt-tools"><label><input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={loadReferenceImages} /><Plus size={17} />{"\u53c2\u8003\u56fe"}{referenceImages.length > 0 && <b>{referenceImages.length}</b>}</label><span>{prompt.length} / 2000</span></div>
         </label>
         <div className="control-group">
           <SelectField label="模型" value={model.id} onChange={setModelId}>
@@ -306,38 +405,80 @@ function PromptPanel({ models, onGenerated }) {
 
 function Canvas({ result, onClear }) {
   const [zoom, setZoom] = useState(100);
+  const [selectedAssetIndex, setSelectedAssetIndex] = useState(0);
+  const assets = result?.assets?.length ? result.assets : result?.imageUrl ? [{ url: result.imageUrl, mimeType: "image" }] : [];
+  const selectedAsset = assets[Math.min(selectedAssetIndex, Math.max(assets.length - 1, 0))];
+
+  useEffect(() => { setSelectedAssetIndex(0); }, [result?.taskId]);
+
   if (!result) {
     return (
       <main className="canvas empty-canvas">
-        <div className="canvas-toolbar"><div><button className="tool-active"><MagnifyingGlass size={18} /></button><button><ArrowCounterClockwise size={18} /></button></div><span>画布会自动适应生成比例</span></div>
-        <div className="empty-state"><span className="empty-icon"><ImageIcon size={27} /></span><h1>从一个想法开始</h1><p>描述你脑海中的画面，Prism 会调用最合适的模型将它呈现出来。</p><div className="suggestions"><button>产品摄影</button><button>电影场景</button><button>角色设定</button></div></div>
+        <div className="canvas-toolbar"><div><button className="tool-active" onClick={() => appNotify("Generated images will appear here.")}><MagnifyingGlass size={18} /></button><button disabled title="Generate an image first"><ArrowCounterClockwise size={18} /></button></div><span>画布会自动适应生成比例</span></div>
+        <div className="empty-state"><span className="empty-icon"><ImageIcon size={27} /></span><h1>从一个想法开始</h1><p>描述你脑海中的画面，Prism 会调用最合适的模型将它呈现出来。</p><div className="suggestions"><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Commercial product photo of a transparent perfume bottle on wet black stone, side rim light, water droplets, shallow depth of field" }))}>产品摄影</button><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Rainy Tokyo street at night, neon reflections on wet pavement, cinematic framing, high contrast lighting" }))}>电影场景</button><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Futuristic mechanic character design, short jacket, tool belt, warm expression, clean concept art background" }))}>角色设定</button></div></div>
         <div className="canvas-status"><span>准备就绪</span><span>自动保存</span></div>
       </main>
     );
   }
   return (
     <main className="canvas result-canvas">
-      <div className="canvas-toolbar"><div><IconButton label="重新生成"><ArrowCounterClockwise size={18} /></IconButton><IconButton label="复制"><Copy size={18} /></IconButton><IconButton label="下载"><DownloadSimple size={18} /></IconButton><IconButton label="删除" onClick={onClear}><Trash size={18} /></IconButton></div><div className="zoom-control"><button onClick={() => setZoom(Math.max(50, zoom - 10))}>−</button><span>{zoom}%</span><button onClick={() => setZoom(Math.min(150, zoom + 10))}>+</button></div></div>
-      <div className="image-stage"><img src={result.imageUrl} alt={result.prompt} style={{ width: `${zoom}%` }} /></div>
-      <div className="result-meta"><div><span className="status-dot" /><strong>{result.model}</strong><span>{result.ratio} · {result.size} · {result.quality}</span></div><span>{result.createdAt}</span></div>
+      <div className="canvas-toolbar"><div><IconButton label="重新生成" onClick={() => { window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: result.prompt })); appNotify("Previous prompt restored."); }}><ArrowCounterClockwise size={18} /></IconButton><IconButton label="复制" onClick={() => { navigator.clipboard?.writeText(result.prompt); appNotify("Prompt copied."); }}><Copy size={18} /></IconButton><IconButton label="下载" onClick={() => { const link = document.createElement("a"); link.href = selectedAsset?.url || result.imageUrl; link.download = (result.taskId || "prism-image") + "-" + (selectedAssetIndex + 1) + ".png"; link.target = "_blank"; document.body.appendChild(link); link.click(); link.remove(); appNotify("Image download started."); }}><DownloadSimple size={18} /></IconButton><IconButton label="删除" onClick={onClear}><Trash size={18} /></IconButton></div><div className="zoom-control"><button onClick={() => setZoom(Math.max(50, zoom - 10))}>−</button><span>{zoom}%</span><button onClick={() => setZoom(Math.min(150, zoom + 10))}>+</button></div></div>
+      <div className="image-stage"><img src={selectedAsset?.url} alt={result.prompt} style={{ width: `${zoom}%` }} /></div>
+      {assets.length > 1 && <div className="result-thumbnails">{assets.map((asset, index) => <button key={asset.url} className={index === selectedAssetIndex ? "active" : ""} onClick={() => setSelectedAssetIndex(index)} aria-label={`查看第 ${index + 1} 张`}><img src={asset.url} alt="" /></button>)}</div>}
+      <div className="result-meta"><div><span className="status-dot" /><strong>{result.model}</strong><span>{result.ratio} · {result.size} · {result.quality} · {assets.length} 张</span></div><span>{result.createdAt}</span></div>
     </main>
   );
 }
 
-function LibraryView({ title, emptyText, icon: Icon }) {
-  return <main className="collection-page"><div className="collection-head"><div><p>工作空间</p><h1>{title}</h1></div><button className="button primary"><Plus size={17} />新建作品</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input placeholder="搜索" /></div><button>全部模型<CaretDown size={14} /></button><button>最近创建<CaretDown size={14} /></button><IconButton label="网格视图"><SquaresFour size={18} /></IconButton></div><div className="collection-empty"><span><Icon size={28} /></span><h2>这里还没有内容</h2><p>{emptyText}</p><button className="button ghost"><Plus size={17} />开始创作</button></div></main>;
+function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], loading = false, queueOnly = false, onSelect, onRefresh }) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState(queueOnly ? "active" : "all");
+  const normalized = query.trim().toLowerCase();
+  const visibleTasks = tasks.filter((task) => {
+    const isActive = task.status === "processing" || task.status === "reserved";
+    const matchesStatus = statusFilter === "all" || (statusFilter === "active" ? isActive : task.status === statusFilter);
+    const matchesQuery = !normalized || (task.prompt || "").toLowerCase().includes(normalized) || (task.model_id || "").toLowerCase().includes(normalized);
+    return matchesStatus && matchesQuery;
+  });
+  const statusLabels = { all: "\u5168\u90e8\u72b6\u6001", active: "\u961f\u5217\u4e2d", completed: "\u5df2\u5b8c\u6210", failed: "\u5931\u8d25" };
+  return <main className="collection-page"><div className="collection-head"><div><p>{"\u5de5\u4f5c\u7a7a\u95f4"}</p><h1>{title}</h1></div><button className="button primary" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u65b0\u5efa\u4f5c\u54c1"}</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></div><button onClick={() => setStatusFilter((value) => value === "all" ? "completed" : value === "completed" ? "failed" : value === "failed" ? "active" : "all")}>{statusLabels[statusFilter]}<CaretDown size={14} /></button><IconButton label="Refresh" onClick={onRefresh}><ClockCounterClockwise size={18} /></IconButton></div>{loading ? <div className="collection-empty"><span className="spinner" /><h2>{"\u6b63\u5728\u8bfb\u53d6"}</h2></div> : visibleTasks.length ? <div className="generation-list">{visibleTasks.map((task) => { const result = generationTaskToResult(task, models); const thumb = task.assets?.[0]?.url; const model = models.find((item) => item.id === task.model_id); return <button key={task.id} className="generation-card" onClick={() => thumb && onSelect?.(result)} disabled={!thumb}><span className="generation-thumb">{thumb ? <img src={thumb} alt="" /> : <Icon size={22} />}</span><div><strong>{task.prompt}</strong><span>{model?.name || task.model_id}</span><small>{task.created_at ? new Date(task.created_at).toLocaleString("zh-CN") : "-"}</small></div><b className={"task-status " + task.status}>{task.status === "completed" ? "\u6210\u529f" : task.status === "failed" ? "\u5931\u8d25" : task.status === "processing" ? "\u5904\u7406\u4e2d" : "\u6392\u961f\u4e2d"}</b></button>; })}</div> : <div className="collection-empty"><span><Icon size={28} /></span><h2>{"\u8fd9\u91cc\u8fd8\u6ca1\u6709\u5185\u5bb9"}</h2><p>{emptyText}</p><button className="button ghost" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u5f00\u59cb\u521b\u4f5c"}</button></div>}</main>;
 }
 
 function CreatorApp({ models }) {
   const [view, setView] = useState("create");
   const [collapsed, setCollapsed] = useState(false);
   const [result, setResult] = useState(null);
+  const [generationTasks, setGenerationTasks] = useState([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+
+  async function loadTasks() {
+    setTasksLoading(true);
+    try {
+      const payload = await fetchWithAuth("/api/generations");
+      setGenerationTasks(payload.tasks || []);
+    } catch (error) {
+      appNotify(error.message, "error");
+    } finally {
+      setTasksLoading(false);
+    }
+  }
+
+  useEffect(() => { loadTasks(); }, []);
+  useEffect(() => {
+    function switchView(event) { setView(event.detail || "create"); }
+    window.addEventListener("prism:set-view", switchView);
+    return () => window.removeEventListener("prism:set-view", switchView);
+  }, []);
+
+  const queueCount = generationTasks.filter((task) => task.status === "processing" || task.status === "reserved").length;
+  const selectTask = (taskResult) => { setResult(taskResult); setView("create"); };
+  const generated = (nextResult) => { setResult(nextResult); loadTasks(); };
   return (
     <div className="creator-layout">
-      <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} />
-      {view === "create" && <><Canvas result={result} onClear={() => setResult(null)} /><PromptPanel models={models} onGenerated={setResult} /></>}
-      {view === "library" && <LibraryView title="作品库" emptyText="生成的图像会自动保存到这里。" icon={ImageIcon} />}
-      {view === "queue" && <LibraryView title="生成队列" emptyText="所有任务都已完成，没有排队中的生成。" icon={Queue} />}
+      <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
+      {view === "create" && <><Canvas result={result} onClear={() => setResult(null)} /><PromptPanel models={models} onGenerated={generated} /></>}
+      {view === "library" && <LibraryView title="\u4f5c\u54c1\u5e93" emptyText="\u751f\u6210\u7684\u56fe\u50cf\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} />}
+      {view === "queue" && <LibraryView title="\u751f\u6210\u961f\u5217" emptyText="\u6ca1\u6709\u6392\u961f\u4e2d\u7684\u751f\u6210\u4efb\u52a1\u3002" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} />}
     </div>
   );
 }
@@ -347,28 +488,102 @@ function StatCard({ label, value, delta, icon: Icon }) {
 }
 
 function Overview() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function loadOverview() {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await fetchWithAuth("/api/admin/overview"));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadOverview(); }, []);
+
+  const stats = data?.stats || {};
+  const statCards = [
+    { label: "\u4eca\u65e5\u751f\u6210", value: formatInteger(stats.generatedToday), delta: trendLabel(stats.generatedTrend), icon: Sparkle },
+    { label: "\u6d3b\u8dc3\u7528\u6237", value: formatInteger(stats.activeUsers), delta: "\u5171 " + formatInteger(stats.totalUsers) + " \u4e2a\u8d26\u6237", icon: Users },
+    { label: "API \u6210\u529f\u7387", value: (Number(stats.successRate) || 0).toFixed(1) + "%", delta: "\u57fa\u4e8e\u5df2\u5b8c\u6210\u4efb\u52a1", icon: ChartBar },
+    { label: "\u4eca\u65e5\u6210\u672c", value: formatMoney(stats.spendToday), delta: "OpenRouter usage", icon: Coins },
+  ];
+  const chart = data?.chart || [];
+  const maxCount = Math.max(1, ...chart.map((item) => item.count));
+  const serviceCopy = {
+    openrouter: { name: "OpenRouter API", detail: (service) => service.detail === "configured" ? "\u5bc6\u94a5\u5df2\u914d\u7f6e" : "\u7f3a\u5c11\u5bc6\u94a5" },
+    queue: { name: "\u4efb\u52a1\u961f\u5217", detail: (service) => service.detail + " \u4e2a\u4efb\u52a1\u5904\u7406\u4e2d" },
+    database: { name: "Supabase", detail: (service) => service.detail + " \u4e2a\u8d26\u6237" },
+  };
   return (
     <div className="admin-page">
-      <div className="page-title"><div><p>2026年6月19日 · 星期五</p><h1>运营总览</h1><span>查看平台实时运行状态与业务数据。</span></div><button className="button ghost"><DownloadSimple size={17} />导出报告</button></div>
-      <div className="stats-grid"><StatCard label="今日生成" value="2,418" delta="↑ 18.2% 较昨日" icon={Sparkle} /><StatCard label="活跃用户" value="684" delta="↑ 8.4% 较昨日" icon={Users} /><StatCard label="API 成功率" value="99.7%" delta="稳定运行" icon={ChartBar} /><StatCard label="今日消耗" value="$86.40" delta="预算使用 42%" icon={Coins} /></div>
+      <div className="page-title"><div><p>{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" })}</p><h1>{"\u8fd0\u8425\u603b\u89c8"}</h1><span>{"\u6765\u81ea Supabase \u4e0e\u751f\u6210\u4efb\u52a1\u8868\u7684\u5b9e\u65f6\u6570\u636e\u3002"}</span></div><button className="button ghost" onClick={() => exportCsv("overview.csv", ["Metric", "Value"], statCards.map((item) => [item.label, item.value]))}><DownloadSimple size={17} />{"\u5bfc\u51fa\u62a5\u544a"}</button></div>
+      {error && <div className="config-note"><WarningCircle size={18} /><div><strong>{"\u65e0\u6cd5\u52a0\u8f7d\u603b\u89c8"}</strong><p>{error}</p></div></div>}
+      {loading ? <div className="table-loading"><span className="spinner" />{"\u6b63\u5728\u8bfb\u53d6\u6570\u636e"}</div> : <>
+      <div className="stats-grid">{statCards.map((card) => <StatCard key={card.label} {...card} />)}</div>
       <div className="admin-grid">
-        <section className="admin-card usage-chart"><div className="card-heading"><div><h3>生成趋势</h3><p>过去 7 天的请求量</p></div><button>近 7 天<CaretDown size={14} /></button></div><div className="chart-area"><div className="chart-y"><span>3k</span><span>2k</span><span>1k</span><span>0</span></div><div className="bars">{[42, 55, 49, 68, 63, 78, 70].map((height, index) => <div key={index}><span style={{ height: `${height}%` }} /><small>{["六", "日", "一", "二", "三", "四", "五"][index]}</small></div>)}</div></div></section>
-        <section className="admin-card"><div className="card-heading"><div><h3>模型用量</h3><p>今日请求分布</p></div><DotsThree size={20} /></div><div className="model-usage"><div><span><i className="usage-color purple" />Nano Banana</span><strong>46%</strong></div><div><span><i className="usage-color blue" />GPT Image 2</span><strong>34%</strong></div><div><span><i className="usage-color gray" />FLUX Kontext</span><strong>20%</strong></div></div></section>
+        <section className="admin-card usage-chart"><div className="card-heading"><div><h3>{"\u751f\u6210\u8d8b\u52bf"}</h3><p>{"\u8fc7\u53bb 7 \u5929\u7684\u8bf7\u6c42\u91cf"}</p></div><button onClick={loadOverview}>{"\u5237\u65b0"}<ClockCounterClockwise size={14} /></button></div><div className="chart-area"><div className="chart-y"><span>{formatInteger(maxCount)}</span><span>{formatInteger(Math.round(maxCount / 2))}</span><span>0</span></div><div className="bars">{chart.map((item) => <div key={item.date}><span style={{ height: Math.max(4, Math.round((item.count / maxCount) * 100)) + "%" }} /><small>{new Date(item.date + "T00:00:00").toLocaleDateString("zh-CN", { weekday: "short" })}</small></div>)}</div></div></section>
+        <section className="admin-card"><div className="card-heading"><div><h3>{"\u6a21\u578b\u7528\u91cf"}</h3><p>{"\u4eca\u65e5\u8bf7\u6c42\u5206\u5e03"}</p></div><DotsThree size={20} /></div><div className="model-usage">{(data?.modelUsage || []).length ? data.modelUsage.map((item, index) => <div key={item.modelId}><span><i className={"usage-color " + (["purple", "blue", "gray"][index % 3])} />{item.name}</span><strong>{item.percent}%</strong></div>) : <div><span>{"\u4eca\u65e5\u8fd8\u6ca1\u6709\u8bf7\u6c42"}</span><strong>0%</strong></div>}</div></section>
       </div>
-      <section className="admin-card"><div className="card-heading"><div><h3>系统状态</h3><p>关键服务与供应商健康度</p></div><span className="healthy"><i />全部正常</span></div><div className="service-list"><div><span className="service-icon"><Code size={18} /></span><div><strong>OpenRouter API</strong><span>平均延迟 1.2s</span></div><b>正常</b></div><div><span className="service-icon"><Queue size={18} /></span><div><strong>任务队列</strong><span>2 个任务处理中</span></div><b>正常</b></div><div><span className="service-icon"><ShieldCheck size={18} /></span><div><strong>鉴权服务</strong><span>最后检查 30 秒前</span></div><b>正常</b></div></div></section>
+      <section className="admin-card"><div className="card-heading"><div><h3>{"\u7cfb\u7edf\u72b6\u6001"}</h3><p>{"\u5173\u952e\u670d\u52a1\u4e0e\u4f9b\u5e94\u5546\u5065\u5eb7\u5ea6"}</p></div><span className="healthy"><i />{(data?.services || []).every((service) => service.ok) ? "\u5168\u90e8\u6b63\u5e38" : "\u9700\u8981\u68c0\u67e5"}</span></div><div className="service-list">{(data?.services || []).map((service) => { const copy = serviceCopy[service.id]; return <div key={service.id}><span className="service-icon">{service.id === "queue" ? <Queue size={18} /> : service.id === "database" ? <ShieldCheck size={18} /> : <Code size={18} />}</span><div><strong>{copy?.name || service.id}</strong><span>{copy?.detail?.(service) || service.detail}</span></div><b>{service.ok ? "\u6b63\u5e38" : "\u5f02\u5e38"}</b></div>; })}</div></section>
+      </>}
     </div>
   );
 }
 
 function ModelCenter({ models, setModels }) {
   const [query, setQuery] = useState("");
-  const visible = models.filter((model) => `${model.name}${model.provider}${model.id}`.toLowerCase().includes(query.toLowerCase()));
-  function toggle(id) { setModels((items) => items.map((item) => item.id === id ? { ...item, enabled: !item.enabled } : item)); }
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [modelError, setModelError] = useState("");
+  const [togglingId, setTogglingId] = useState("");
+  const providers = ["all", ...Array.from(new Set(models.map((model) => model.provider)))];
+  const visible = models.filter((model) => {
+    const matchesQuery = `${model.name}${model.provider}${model.id}`.toLowerCase().includes(query.toLowerCase());
+    const matchesProvider = providerFilter === "all" || model.provider === providerFilter;
+    const matchesStatus = statusFilter === "all" || (statusFilter === "enabled" ? model.enabled : !model.enabled);
+    return matchesQuery && matchesProvider && matchesStatus;
+  });
+  const cycleProvider = () => setProviderFilter((value) => providers[(providers.indexOf(value) + 1) % providers.length]);
+  const cycleStatus = () => setStatusFilter((value) => value === "all" ? "enabled" : value === "enabled" ? "disabled" : "all");
+
+  async function toggle(model) {
+    const enabled = !model.enabled;
+    const previous = models;
+    setModelError("");
+    setTogglingId(model.id);
+    setModels((items) => items.map((item) => item.id === model.id ? { ...item, enabled } : item));
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const response = await fetch("/api/admin/models", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionData.session?.access_token || ""}` },
+        body: JSON.stringify({ id: model.id, enabled }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error || "更新模型失败");
+      if (payload.model) {
+        setModels((items) => items.map((item) => item.id === payload.model.id ? { ...payload.model, cost: payload.model.credit_cost } : item));
+      }
+    } catch (requestError) {
+      setModels(previous);
+      setModelError(requestError.message);
+    } finally {
+      setTogglingId("");
+    }
+  }
+
   return (
     <div className="admin-page">
-      <div className="page-title"><div><p>平台配置</p><h1>模型中心</h1><span>配置可用模型、能力参数与积分成本。</span></div><button className="button primary"><Plus size={17} />添加模型</button></div>
-      <div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型名称或 ID" /></label><button>全部供应商<CaretDown size={14} /></button><button>全部状态<CaretDown size={14} /></button></div>
-      <section className="table-card"><table><thead><tr><th>模型</th><th>能力</th><th>支持分辨率</th><th>积分/张</th><th>状态</th><th /></tr></thead><tbody>{visible.map((model) => <tr key={model.id}><td><div className="model-cell"><span className={`provider-logo ${model.provider.toLowerCase().replaceAll(" ", "-")}`}>{model.provider[0]}</span><div><strong>{model.name}</strong><span>{model.id}</span></div></div></td><td><span className="table-tag">文生图</span><span className="table-tag">{model.badge}</span></td><td>{model.sizes.join(" / ")}</td><td><strong>{model.cost}</strong></td><td><button className={`toggle ${model.enabled ? "on" : ""}`} onClick={() => toggle(model.id)}><span /></button></td><td><IconButton label="更多"><DotsThree size={20} /></IconButton></td></tr>)}</tbody></table></section>
+      <div className="page-title"><div><p>平台配置</p><h1>模型中心</h1><span>配置可用模型、能力参数与积分成本。</span></div><button className="button primary" onClick={() => appNotify("Use the creator page to start a new image.")}><Plus size={17} />添加模型</button></div>
+      <div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0\u6216 ID" /></label><button onClick={cycleProvider}>{providerFilter === "all" ? "\u5168\u90e8\u4f9b\u5e94\u5546" : providerFilter}<CaretDown size={14} /></button><button onClick={cycleStatus}>{statusFilter === "all" ? "\u5168\u90e8\u72b6\u6001" : statusFilter === "enabled" ? "\u5df2\u542f\u7528" : "\u5df2\u505c\u7528"}<CaretDown size={14} /></button></div>
+      {modelError && <div className="config-note"><WarningCircle size={18} /><div><strong>无法更新模型</strong><p>{modelError}</p></div></div>}
+      <section className="table-card"><table><thead><tr><th>模型</th><th>能力</th><th>支持分辨率</th><th>积分/张</th><th>状态</th><th /></tr></thead><tbody>{visible.map((model) => <tr key={model.id}><td><div className="model-cell"><span className={`provider-logo ${model.provider.toLowerCase().replaceAll(" ", "-")}`}>{model.provider[0]}</span><div><strong>{model.name}</strong><span>{model.id}</span></div></div></td><td><span className="table-tag">文生图</span><span className="table-tag">{model.badge}</span></td><td>{model.sizes.join(" / ")}</td><td><strong>{model.cost}</strong></td><td><button className={`toggle ${model.enabled ? "on" : ""}`} disabled={togglingId === model.id} onClick={() => toggle(model)}><span /></button></td><td><IconButton label="更多"><DotsThree size={20} /></IconButton></td></tr>)}</tbody></table></section>
       <div className="config-note"><WarningCircle size={18} /><div><strong>模型能力由管理员维护</strong><p>OpenRouter 会持续更新模型目录。上线时应定期同步供应商元数据，并在服务端校验实际支持参数。</p></div></div>
     </div>
   );
@@ -396,19 +611,40 @@ function ApiSettings() {
   );
 }
 
+const DATA_PAGE_COPY = {
+  billing: { title: "\u989d\u5ea6\u4e0e\u8ba1\u8d39", sub: "\u6839\u636e\u771f\u5b9e\u8d26\u6237\u5957\u9910\u4e0e\u5269\u4f59\u79ef\u5206\u6c47\u603b\u3002" },
+  logs: { title: "\u8bf7\u6c42\u65e5\u5fd7", sub: "\u6765\u81ea\u751f\u6210\u4efb\u52a1\u8868\u7684\u6700\u8fd1\u8bf7\u6c42\u3002" },
+};
+
 function DataPage({ type }) {
-  const configs = {
-    users: { title: "用户管理", sub: "管理账户权限、状态与使用额度。", headers: ["用户", "角色", "今日生成", "剩余额度", "状态"], rows: [["Zhiheng", "管理员", "42", "1,280", "正常"], ["Mia Chen", "普通用户", "18", "640", "正常"], ["Lin Studio", "团队账户", "126", "3,840", "正常"], ["Avery", "普通用户", "0", "120", "暂停"]] },
-    billing: { title: "额度与计费", sub: "设置积分规则并查看平台成本。", headers: ["套餐", "月度积分", "用户数", "月收入", "状态"], rows: [["Free", "100", "1,204", "$0", "启用"], ["Pro", "2,000", "386", "$4,980", "启用"], ["Studio", "10,000", "42", "$3,318", "启用"]] },
-    logs: { title: "请求日志", sub: "追踪模型请求、耗时与错误。", headers: ["请求 ID", "用户", "模型", "耗时", "状态"], rows: [["req_a84f92", "Zhiheng", "Nano Banana", "8.4s", "成功"], ["req_b107ce", "Mia Chen", "GPT Image 2", "14.2s", "成功"], ["req_c92a41", "Lin Studio", "FLUX Kontext", "2.1s", "重试中"], ["req_e72d88", "Avery", "GPT Image 2", "—", "失败"]] },
-  };
-  const config = configs[type];
-  return <div className="admin-page"><div className="page-title"><div><p>平台管理</p><h1>{config.title}</h1><span>{config.sub}</span></div><button className="button primary"><Plus size={17} />新增</button></div><div className="table-toolbar"><label><MagnifyingGlass size={17} /><input placeholder="搜索" /></label><button>筛选<CaretDown size={14} /></button><button>导出<DownloadSimple size={14} /></button></div><section className="table-card"><table><thead><tr>{config.headers.map((item) => <th key={item}>{item}</th>)}<th /></tr></thead><tbody>{config.rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cellIndex === 0 ? <strong>{cell}</strong> : cell}{cellIndex === row.length - 1 && <span className={`row-status ${cell === "失败" || cell === "暂停" ? "bad" : cell === "重试中" ? "warn" : ""}`} />}</td>)}<td><IconButton label="更多"><DotsThree size={20} /></IconButton></td></tr>)}</tbody></table></section></div>;
+  const copy = DATA_PAGE_COPY[type] || DATA_PAGE_COPY.logs;
+  const [data, setData] = useState({ headers: [], rows: [] });
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function loadData() {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await fetchWithAuth("/api/admin/data/" + type));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadData(); }, [type]);
+  const normalized = query.trim().toLowerCase();
+  const rows = (data.rows || []).filter((row) => !normalized || row.cells.some((cell) => String(cell).toLowerCase().includes(normalized)));
+  return <div className="admin-page"><div className="page-title"><div><p>{"\u5e73\u53f0\u7ba1\u7406"}</p><h1>{copy.title}</h1><span>{copy.sub}</span></div><button className="button ghost" onClick={loadData}><ClockCounterClockwise size={17} />{"\u5237\u65b0"}</button></div><div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></label><button onClick={() => exportCsv(type + ".csv", data.headers || [], rows.map((row) => row.cells))}>{"\u5bfc\u51fa"}<DownloadSimple size={14} /></button></div>{error && <div className="config-note"><WarningCircle size={18} /><div><strong>{"\u65e0\u6cd5\u52a0\u8f7d\u6570\u636e"}</strong><p>{error}</p></div></div>}<section className="table-card"><table><thead><tr>{(data.headers || []).map((item) => <th key={item}>{item}</th>)}<th /></tr></thead><tbody>{loading && <tr><td colSpan={(data.headers?.length || 1) + 1}><div className="table-loading"><span className="spinner" />{"\u6b63\u5728\u8bfb\u53d6\u6570\u636e"}</div></td></tr>}{!loading && rows.length === 0 && <tr><td colSpan={(data.headers?.length || 1) + 1}><div className="table-loading">{"\u6ca1\u6709\u5339\u914d\u7684\u6570\u636e"}</div></td></tr>}{!loading && rows.map((row) => <tr key={row.id}>{row.cells.map((cell, cellIndex) => <td key={cellIndex}>{cellIndex === 0 ? <strong>{cell}</strong> : cell}{cellIndex === row.cells.length - 1 && <span className={"row-status " + (row.tone === "bad" ? "bad" : row.tone === "warn" ? "warn" : "")} />}</td>)}<td><IconButton label="Copy row" onClick={() => { navigator.clipboard?.writeText(row.cells.join("\t")); appNotify("Row copied."); }}><DotsThree size={20} /></IconButton></td></tr>)}</tbody></table></section></div>;
 }
 
 function AdminApp({ models, setModels }) {
   const [page, setPage] = useState("overview");
-  return <div className="admin-layout"><aside className="admin-sidebar"><div className="admin-nav-title">管理后台</div><nav>{ADMIN_NAV.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="admin-sidebar-bottom"><div className="environment"><i /><div><strong>Production</strong><span>运行正常</span></div></div><button><GearSix size={19} />系统设置</button></div></aside><main className="admin-content">{page === "overview" && <Overview />}{page === "users" && <UserManagement />}{page === "models" && <ModelCenter models={models} setModels={setModels} />}{page === "api" && <ApiSettings />}{["billing", "logs"].includes(page) && <DataPage type={page} />}</main></div>;
+  const envName = import.meta.env.MODE || "app";
+  return <div className="admin-layout"><aside className="admin-sidebar"><div className="admin-nav-title">{"\u7ba1\u7406\u540e\u53f0"}</div><nav>{ADMIN_NAV.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="admin-sidebar-bottom"><div className="environment"><i /><div><strong>{envName}</strong><span>{"\u4f1a\u8bdd\u5df2\u8fde\u63a5"}</span></div></div><button onClick={() => setPage("api")}><GearSix size={19} />{"\u7cfb\u7edf\u8bbe\u7f6e"}</button></div></aside><main className="admin-content">{page === "overview" && <Overview />}{page === "users" && <UserManagement />}{page === "models" && <ModelCenter models={models} setModels={setModels} />}{page === "api" && <ApiSettings />}{["billing", "logs"].includes(page) && <DataPage type={page} />}</main></div>;
 }
 
 export function App() {
@@ -419,13 +655,16 @@ export function App() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [models, setModels] = useState(() => readStorage("prism_models", DEFAULT_MODELS));
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     if (!session?.user?.id || !supabase) return;
-    supabase.from("ai_models").select("id,name,provider,badge,enabled,ratios,sizes,qualities,credit_cost").eq("enabled", true).order("credit_cost").then(({ data }) => {
+    const query = supabase.from("ai_models").select("id,name,provider,badge,enabled,ratios,sizes,qualities,credit_cost").order("credit_cost");
+    if (profile?.role !== "admin") query.eq("enabled", true);
+    query.then(({ data }) => {
       if (data?.length) setModels(data.map((item) => ({ ...item, cost: item.credit_cost })));
     });
-  }, [session?.user?.id]);
+  }, [session?.user?.id, profile?.role]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -477,6 +716,18 @@ export function App() {
   }, [session?.user?.id]);
 
   useEffect(() => { localStorage.setItem("prism_models", JSON.stringify(models)); }, [models]);
+  useEffect(() => {
+    function showToast(event) {
+      setToast({ ...(event.detail || {}), id: Date.now() });
+    }
+    window.addEventListener("prism:notify", showToast);
+    return () => window.removeEventListener("prism:notify", showToast);
+  }, []);
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   if (authLoading) return <div className="app-loading"><span className="brand-mark"><Sparkle size={16} weight="fill" /></span><i className="spinner" />正在恢复安全会话</div>;
   if (!isSupabaseConfigured || !session || recoveryMode) return <AuthScreen recoveryMode={recoveryMode} onRecoveryComplete={() => setRecoveryMode(false)} />;
@@ -489,6 +740,7 @@ export function App() {
     <div className="app-shell">
       <Header isAdmin={isAdmin} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
       {isAdmin ? <AdminApp models={models} setModels={setModels} /> : <CreatorApp models={models} />}
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }

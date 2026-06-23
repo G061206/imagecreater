@@ -88,7 +88,7 @@ export function AuthScreen({ recoveryMode = false, onRecoveryComplete }) {
           <h1>把想法变成<br />可以看见的画面。</h1>
           <span>统一管理模型、提示词、生成任务与团队资产。</span>
         </div>
-        <div className="auth-proof"><div><strong>3</strong><span>图像模型</span></div><div><strong>99.7%</strong><span>请求成功率</span></div><div><strong>24/7</strong><span>任务队列</span></div></div>
+        <div className="auth-proof"><div><strong>Auth</strong><span>Supabase</span></div><div><strong>API</strong><span>Server-side</span></div><div><strong>DB</strong><span>PostgreSQL</span></div></div>
       </section>
       <section className="auth-form-side">
         <div className="auth-card">

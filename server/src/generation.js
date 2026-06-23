@@ -10,6 +10,7 @@ export const generationSchema = z.object({
   size: z.enum(["1K", "2K", "4K", "1024", "1536", "2048"]),
   quality: z.enum(["标准", "高清", "超高清"]),
   count: z.number().int().min(1).max(4),
+  referenceImages: z.array(z.string().regex(/^data:image\/(?:png|jpeg|webp);base64,/)).max(4).optional().default([]),
   negativePrompt: z.string().trim().max(1000).optional().default(""),
   seed: z.number().int().min(0).max(2147483647).optional(),
 });
@@ -27,9 +28,12 @@ const slots = new Semaphore(config.MAX_CONCURRENT_GENERATIONS);
 
 function providerPayload(input) {
   const prompt = [input.prompt, input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
+  const content = input.referenceImages?.length
+    ? [{ type: "text", text: prompt }, ...input.referenceImages.map((url) => ({ type: "image_url", image_url: { url } }))]
+    : prompt;
   return {
     model: input.modelId,
-    messages: [{ role: "user", content: prompt }],
+    messages: [{ role: "user", content }],
     modalities: ["image", "text"],
     image_config: { aspect_ratio: input.ratio, image_size: input.size },
     quality: input.quality === "超高清" ? "high" : input.quality === "高清" ? "medium" : "standard",
@@ -65,7 +69,7 @@ async function reserve(userId, input) {
     p_user_id: userId,
     p_model_id: input.modelId,
     p_prompt: input.prompt,
-    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null },
+    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null },
     p_image_count: input.count,
   });
   if (error) throw new Error(error.message);
@@ -90,6 +94,7 @@ export async function generateForUser(userId, input) {
     if (!response.ok) throw new Error(payload?.error?.message || `OpenRouter request failed (${response.status})`);
     const images = collectImages(payload);
     if (!images.length) throw new Error("The model returned no image");
+    if (images.length < input.count) throw new Error(`The model returned ${images.length} image(s), but ${input.count} were requested`);
 
     for (const image of images.slice(0, input.count)) {
       const { mimeType, bytes } = await readImage(image, controller.signal);
