@@ -26,15 +26,19 @@ class Semaphore {
 }
 const slots = new Semaphore(config.MAX_CONCURRENT_GENERATIONS);
 
+function outputModalities(modelId) {
+  return modelId.startsWith("x-ai/grok-imagine") ? ["image"] : ["image", "text"];
+}
+
 function providerPayload(input) {
-  const prompt = [input.prompt, input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
+  const prompt = [input.prompt, "Return the generated image as an image output in the response. Do not return only a text description.", input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
   const content = input.referenceImages?.length
     ? [{ type: "text", text: prompt }, ...input.referenceImages.map((url) => ({ type: "image_url", image_url: { url } }))]
     : prompt;
   return {
     model: input.modelId,
     messages: [{ role: "user", content }],
-    modalities: ["image", "text"],
+    modalities: outputModalities(input.modelId),
     max_tokens: config.OPENROUTER_MAX_TOKENS,
     image_config: { aspect_ratio: input.ratio, image_size: input.size },
     quality: input.quality === "超高清" ? "high" : input.quality === "高清" ? "medium" : "standard",
@@ -43,47 +47,69 @@ function providerPayload(input) {
 }
 
 function dataUrlFromBase64(value, mimeType = "image/png") {
-  return value ? `data:${mimeType};base64,${value}` : null;
+  const clean = typeof value === "string" ? value.replace(/\s/g, "") : "";
+  return clean ? "data:" + mimeType + ";base64," + clean : null;
+}
+
+function isLikelyBase64Image(value) {
+  return typeof value === "string" && value.length > 200 && /^[A-Za-z0-9+/=\r\n]+$/.test(value);
+}
+
+function mimeFromValue(value, fallback = "image/png") {
+  return /^image\/(?:png|jpeg|webp)$/.test(value || "") ? value : fallback;
 }
 
 function collectImageCandidates(value, output, seen = new Set()) {
-  if (!value || output.length >= 8) return;
+  if (!value || output.length >= 16) return;
   if (typeof value === "string") {
-    if (new RegExp("^data:image/(?:png|jpeg|webp);base64,", "i").test(value) || new RegExp("^https?://", "i").test(value)) {
+    if (/^data:image\/(?:png|jpeg|webp);base64,/i.test(value) || /^https?:\/\//i.test(value)) {
       output.push(value);
       return;
     }
-    for (const match of value.matchAll(new RegExp("data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+", "gi"))) output.push(match[0]);
+    for (const match of value.matchAll(/data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+/gi)) output.push(match[0]);
+    for (const match of value.matchAll(/https?:\/\/[^\s)'"<>]+/gi)) output.push(match[0]);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectImageCandidates(item, output, seen);
     return;
   }
   if (typeof value !== "object" || seen.has(value)) return;
   seen.add(value);
 
-  const mimeType = value.mime_type || value.mimeType || value.media_type || value.mediaType || value.type;
-  if (typeof value.b64_json === "string") output.push(dataUrlFromBase64(value.b64_json));
-  if (typeof value.base64_json === "string") output.push(dataUrlFromBase64(value.base64_json));
-  if (typeof value.image_base64 === "string") output.push(dataUrlFromBase64(value.image_base64, new RegExp("^image/").test(mimeType) ? mimeType : "image/png"));
-  if (typeof value.data === "string" && new RegExp("^image/").test(mimeType)) output.push(dataUrlFromBase64(value.data, mimeType));
+  const mimeType = mimeFromValue(value.mime_type || value.mimeType || value.media_type || value.mediaType);
+  for (const key of ["b64_json", "base64_json", "image_base64", "imageBase64", "base64", "b64"]) {
+    if (typeof value[key] === "string") output.push(dataUrlFromBase64(value[key], mimeType));
+  }
+  for (const key of ["data", "result", "image"]) {
+    if (isLikelyBase64Image(value[key])) output.push(dataUrlFromBase64(value[key], mimeType));
+  }
+  if (typeof value.data === "string" && /^image\//.test(value.type || value.media_type || value.mime_type || "")) output.push(dataUrlFromBase64(value.data, mimeFromValue(value.type || value.media_type || value.mime_type)));
 
   if (typeof value.url === "string") collectImageCandidates(value.url, output, seen);
   if (typeof value.image_url === "string") collectImageCandidates(value.image_url, output, seen);
   if (value.image_url?.url) collectImageCandidates(value.image_url.url, output, seen);
-  if (value.source?.data && new RegExp("^image/").test(value.source?.media_type || "")) output.push(dataUrlFromBase64(value.source.data, value.source.media_type));
+  if (value.source?.data && /^image\//.test(value.source?.media_type || "")) output.push(dataUrlFromBase64(value.source.data, value.source.media_type));
 
-  for (const key of ["data", "images", "content", "image", "output_image", "generated_image", "result"]) {
-    if (value[key] && !(typeof value[key] === "string" && key === "data")) collectImageCandidates(value[key], output, seen);
+  for (const key of ["data", "images", "content", "image", "image_url", "output", "outputs", "output_image", "generated_image", "result", "results", "response"]) {
+    if (value[key] && !(typeof value[key] === "string" && ["data", "image", "result"].includes(key))) collectImageCandidates(value[key], output, seen);
   }
+}
+
+function describeProviderShape(value, depth = 0, seen = new Set()) {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value === "string") return value.length > 80 ? "string(" + value.length + ")" : "string";
+  if (typeof value !== "object") return typeof value;
+  if (seen.has(value)) return "[circular]";
+  if (depth >= 3) return Array.isArray(value) ? "array(" + value.length + ")" : "object";
+  seen.add(value);
+  if (Array.isArray(value)) return value.slice(0, 3).map((item) => describeProviderShape(item, depth + 1, seen));
+  return Object.fromEntries(Object.entries(value).slice(0, 20).map(([key, item]) => [key, describeProviderShape(item, depth + 1, seen)]));
 }
 
 function collectImages(payload) {
   const images = [];
-  collectImageCandidates(payload?.data, images);
-  for (const choice of payload?.choices || []) {
-    collectImageCandidates(choice?.message?.images, images);
-    collectImageCandidates(choice?.message?.content, images);
-    collectImageCandidates(choice?.message, images);
-  }
-  collectImageCandidates(payload?.images, images);
+  collectImageCandidates(payload, images);
   return [...new Set(images.filter(Boolean))];
 }
 
@@ -133,7 +159,7 @@ export async function generateForUser(userId, input) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload?.error?.message || `OpenRouter request failed (${response.status})`);
     const images = collectImages(payload);
-    if (!images.length) throw new Error("The model returned no image");
+    if (!images.length) throw new Error(`The model returned no recognizable image. Response shape: ${JSON.stringify(describeProviderShape(payload))}`);
     if (images.length < input.count) throw new Error(`The model returned ${images.length} image(s), but ${input.count} were requested`);
 
     for (const image of images.slice(0, input.count)) {
