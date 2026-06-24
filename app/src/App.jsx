@@ -383,7 +383,7 @@ function PromptPanel({ models, onGenerated }) {
 
   return (
     <aside className="prompt-panel">
-      <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="服务端安全托管" onClick={() => appNotify("Secrets are kept on the server side.")}><ShieldCheck size={19} /></IconButton><IconButton label="更多"><DotsThree size={20} /></IconButton></div></div>
+      <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="服务端安全托管" onClick={() => appNotify("Secrets are kept on the server side.")}><ShieldCheck size={19} /></IconButton></div></div>
       <div className="panel-scroll">
         <label className="prompt-box">
           <span>描述你的画面</span>
@@ -595,12 +595,13 @@ function Overview() {
   );
 }
 
-function ModelCenter({ models, setModels }) {
+function ModelCenter({ models, setModels, onRefresh }) {
   const [query, setQuery] = useState("");
   const [providerFilter, setProviderFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [modelError, setModelError] = useState("");
   const [togglingId, setTogglingId] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const providers = ["all", ...Array.from(new Set(models.map((model) => model.provider)))];
   const visible = models.filter((model) => {
     const matchesQuery = `${model.name}${model.provider}${model.id}`.toLowerCase().includes(query.toLowerCase());
@@ -610,6 +611,19 @@ function ModelCenter({ models, setModels }) {
   });
   const cycleProvider = () => setProviderFilter((value) => providers[(providers.indexOf(value) + 1) % providers.length]);
   const cycleStatus = () => setStatusFilter((value) => value === "all" ? "enabled" : value === "enabled" ? "disabled" : "all");
+
+  async function refreshModels() {
+    setRefreshing(true);
+    setModelError("");
+    try {
+      await onRefresh?.();
+      appNotify("模型列表已刷新");
+    } catch (requestError) {
+      setModelError(requestError.message);
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function toggle(model) {
     const enabled = !model.enabled;
@@ -639,10 +653,10 @@ function ModelCenter({ models, setModels }) {
 
   return (
     <div className="admin-page">
-      <div className="page-title"><div><p>平台配置</p><h1>模型中心</h1><span>配置可用模型、能力参数与积分成本。</span></div><button className="button primary" onClick={() => appNotify("Use the creator page to start a new image.")}><Plus size={17} />添加模型</button></div>
+      <div className="page-title"><div><p>平台配置</p><h1>模型中心</h1><span>配置可用模型、能力参数与积分成本。</span></div><button className="button ghost" onClick={refreshModels} disabled={refreshing}>{refreshing ? <span className="spinner dark" /> : <ClockCounterClockwise size={17} />}刷新模型</button></div>
       <div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0\u6216 ID" /></label><button onClick={cycleProvider}>{providerFilter === "all" ? "\u5168\u90e8\u4f9b\u5e94\u5546" : providerFilter}<CaretDown size={14} /></button><button onClick={cycleStatus}>{statusFilter === "all" ? "\u5168\u90e8\u72b6\u6001" : statusFilter === "enabled" ? "\u5df2\u542f\u7528" : "\u5df2\u505c\u7528"}<CaretDown size={14} /></button></div>
       {modelError && <div className="config-note"><WarningCircle size={18} /><div><strong>无法更新模型</strong><p>{modelError}</p></div></div>}
-      <section className="table-card"><table><thead><tr><th>模型</th><th>能力</th><th>支持分辨率</th><th>积分/张</th><th>状态</th><th /></tr></thead><tbody>{visible.map((model) => <tr key={model.id}><td><div className="model-cell"><span className={`provider-logo ${model.provider.toLowerCase().replaceAll(" ", "-")}`}>{model.provider[0]}</span><div><strong>{model.name}</strong><span>{model.id}</span></div></div></td><td><span className="table-tag">文生图</span><span className="table-tag">{model.badge}</span></td><td>{model.sizes.join(" / ")}</td><td><strong>{model.cost}</strong></td><td><button className={`toggle ${model.enabled ? "on" : ""}`} disabled={togglingId === model.id} onClick={() => toggle(model)}><span /></button></td><td><IconButton label="更多"><DotsThree size={20} /></IconButton></td></tr>)}</tbody></table></section>
+      <section className="table-card"><table><thead><tr><th>模型</th><th>能力</th><th>支持分辨率</th><th>积分/张</th><th>状态</th></tr></thead><tbody>{visible.map((model) => <tr key={model.id}><td><div className="model-cell"><span className={`provider-logo ${model.provider.toLowerCase().replaceAll(" ", "-")}`}>{model.provider[0]}</span><div><strong>{model.name}</strong><span>{model.id}</span></div></div></td><td><span className="table-tag">文生图</span><span className="table-tag">{model.badge}</span></td><td>{model.sizes.join(" / ")}</td><td><strong>{model.cost}</strong></td><td><button className={`toggle ${model.enabled ? "on" : ""}`} disabled={togglingId === model.id} onClick={() => toggle(model)}><span /></button></td></tr>)}</tbody></table></section>
       <div className="config-note"><WarningCircle size={18} /><div><strong>模型能力由管理员维护</strong><p>OpenRouter 会持续更新模型目录。上线时应定期同步供应商元数据，并在服务端校验实际支持参数。</p></div></div>
     </div>
   );
@@ -700,10 +714,10 @@ function DataPage({ type }) {
   return <div className="admin-page"><div className="page-title"><div><p>{"\u5e73\u53f0\u7ba1\u7406"}</p><h1>{copy.title}</h1><span>{copy.sub}</span></div><button className="button ghost" onClick={loadData}><ClockCounterClockwise size={17} />{"\u5237\u65b0"}</button></div><div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></label><button onClick={() => exportCsv(type + ".csv", data.headers || [], rows.map((row) => row.cells))}>{"\u5bfc\u51fa"}<DownloadSimple size={14} /></button></div>{error && <div className="config-note"><WarningCircle size={18} /><div><strong>{"\u65e0\u6cd5\u52a0\u8f7d\u6570\u636e"}</strong><p>{error}</p></div></div>}<section className="table-card"><table><thead><tr>{(data.headers || []).map((item) => <th key={item}>{item}</th>)}<th /></tr></thead><tbody>{loading && <tr><td colSpan={(data.headers?.length || 1) + 1}><div className="table-loading"><span className="spinner" />{"\u6b63\u5728\u8bfb\u53d6\u6570\u636e"}</div></td></tr>}{!loading && rows.length === 0 && <tr><td colSpan={(data.headers?.length || 1) + 1}><div className="table-loading">{"\u6ca1\u6709\u5339\u914d\u7684\u6570\u636e"}</div></td></tr>}{!loading && rows.map((row) => <tr key={row.id}>{row.cells.map((cell, cellIndex) => <td key={cellIndex}>{cellIndex === 0 ? <strong>{cell}</strong> : cell}{cellIndex === row.cells.length - 1 && <span className={"row-status " + (row.tone === "bad" ? "bad" : row.tone === "warn" ? "warn" : "")} />}</td>)}<td><IconButton label="Copy row" onClick={() => { navigator.clipboard?.writeText(row.cells.join("\t")); appNotify("Row copied."); }}><DotsThree size={20} /></IconButton></td></tr>)}</tbody></table></section></div>;
 }
 
-function AdminApp({ models, setModels }) {
+function AdminApp({ models, setModels, onRefreshModels }) {
   const [page, setPage] = useState("overview");
   const envName = import.meta.env.MODE || "app";
-  return <div className="admin-layout"><aside className="admin-sidebar"><div className="admin-nav-title">{"\u7ba1\u7406\u540e\u53f0"}</div><nav>{ADMIN_NAV.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="admin-sidebar-bottom"><div className="environment"><i /><div><strong>{envName}</strong><span>{"\u4f1a\u8bdd\u5df2\u8fde\u63a5"}</span></div></div><button onClick={() => setPage("api")}><GearSix size={19} />{"\u7cfb\u7edf\u8bbe\u7f6e"}</button></div></aside><main className="admin-content">{page === "overview" && <Overview />}{page === "users" && <UserManagement />}{page === "models" && <ModelCenter models={models} setModels={setModels} />}{page === "api" && <ApiSettings />}{["billing", "logs"].includes(page) && <DataPage type={page} />}</main></div>;
+  return <div className="admin-layout"><aside className="admin-sidebar"><div className="admin-nav-title">{"\u7ba1\u7406\u540e\u53f0"}</div><nav>{ADMIN_NAV.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={19} /><span>{label}</span></button>)}</nav><div className="admin-sidebar-bottom"><div className="environment"><i /><div><strong>{envName}</strong><span>{"\u4f1a\u8bdd\u5df2\u8fde\u63a5"}</span></div></div><button onClick={() => setPage("api")}><GearSix size={19} />{"\u7cfb\u7edf\u8bbe\u7f6e"}</button></div></aside><main className="admin-content">{page === "overview" && <Overview />}{page === "users" && <UserManagement />}{page === "models" && <ModelCenter models={models} setModels={setModels} onRefresh={onRefreshModels} />}{page === "api" && <ApiSettings />}{["billing", "logs"].includes(page) && <DataPage type={page} />}</main></div>;
 }
 
 export function App() {
@@ -716,13 +730,17 @@ export function App() {
   const [models, setModels] = useState(() => readStorage("prism_models", DEFAULT_MODELS));
   const [toast, setToast] = useState(null);
 
-  useEffect(() => {
+  async function loadModels() {
     if (!session?.user?.id || !supabase) return;
     const query = supabase.from("ai_models").select("id,name,provider,badge,enabled,ratios,sizes,qualities,credit_cost").order("credit_cost");
     if (profile?.role !== "admin") query.eq("enabled", true);
-    query.then(({ data }) => {
-      if (data?.length) setModels(data.map((item) => ({ ...item, cost: item.credit_cost })));
-    });
+    const { data, error } = await query;
+    if (error) throw error;
+    if (data?.length) setModels(data.map((item) => ({ ...item, cost: item.credit_cost })));
+  }
+
+  useEffect(() => {
+    loadModels().catch((error) => appNotify(error.message, "error"));
   }, [session?.user?.id, profile?.role]);
 
   useEffect(() => {
@@ -798,7 +816,7 @@ export function App() {
   return (
     <div className="app-shell">
       <Header isAdmin={isAdmin} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
-      {isAdmin ? <AdminApp models={models} setModels={setModels} /> : <CreatorApp models={models} />}
+      {isAdmin ? <AdminApp models={models} setModels={setModels} onRefreshModels={loadModels} /> : <CreatorApp models={models} />}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   );

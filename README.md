@@ -1,18 +1,30 @@
 # Prism Image Studio
 
-Prism 是一个面向多用户的 AI 图像生成平台，界面参考 Google Flow。项目包含 Supabase Auth、PostgreSQL/RLS、管理员后台、OpenRouter 服务端代理、生成额度、私有图片存储，以及可直接部署到 VPS 的 Docker Compose + Caddy 配置。
+Prism Image Studio 是一个面向多用户的 AI 图像生成工作台。前端使用 React + Vite，服务端使用 Express 统一代理 OpenRouter 请求，并通过 Supabase Auth、PostgreSQL/RLS 和私有 Storage 完成登录、计费、任务记录与作品库管理。
 
-## 功能
+## 已实装功能
 
-- 邮箱注册、登录、密码找回和账户资料管理
-- 普通用户与管理员权限隔离
-- GPT Image 2、Nano Banana 等 OpenRouter 图像模型
-- 比例、分辨率、品质、数量、负面提示词和随机种子
-- 生成前额度预扣，失败自动退款
-- 生成任务、供应商请求和成本记录
-- 图片写入私有 Supabase Storage，通过短期签名 URL 访问
-- 管理员管理角色、套餐、额度和账户状态
-- Caddy 自动申请和续期 HTTPS 证书
+- 邮箱注册、登录、找回密码、密码恢复和账户资料设置。
+- 普通用户与管理员角色隔离，管理员可管理用户角色、套餐、积分和账户状态。
+- OpenRouter 服务端代理生图，浏览器不接触 `OPENROUTER_API_KEY`。
+- 支持 Gemini/Nano Banana、GPT-5.4 Image 2、Grok Imagine Image Quality 等数据库模型配置。
+- GPT Image 系列走 OpenRouter `/images` endpoint，其他图像模型走 `/chat/completions`，并兼容 `choices[].message.images`、`data[].b64_json`、data URL 和远程图片 URL 等返回形态。
+- 生成前预扣积分，失败时自动回滚积分；成功后记录任务、供应商成本和生成资产。
+- 图片写入私有 Supabase Storage，并通过短期签名 URL 展示。
+- 作品库支持搜索、筛选、选择、多选删除和刷新。
+- 管理后台包含总览、用户管理、模型中心、API 健康检查、计费汇总和请求日志。
+- Docker Compose + Caddy 部署，支持自动 HTTPS。
+
+## 项目结构
+
+```text
+app/                  React/Vite 前端
+server/               Express API、OpenRouter 代理、Supabase service-role 操作
+supabase/migrations/  数据库、RLS、RPC、Storage bucket 和模型种子数据
+deploy/Caddyfile      生产反向代理与 HTTPS
+scripts/dev.mjs       本地前后端开发启动脚本
+compose.yaml          VPS 部署编排
+```
 
 ## 架构
 
@@ -20,63 +32,40 @@ Prism 是一个面向多用户的 AI 图像生成平台，界面参考 Google Fl
 Browser
   | Supabase access token
   v
-Caddy (HTTPS)
-  v
 Express API
   |-- Supabase Auth / PostgreSQL / Storage
-  `-- OpenRouter image models
+  `-- OpenRouter image endpoints
 ```
 
-OpenRouter key 和 Supabase service-role secret 只存在于 VPS 的 `server/.env`。浏览器只能获得 Supabase publishable key。
+生产环境中只有前端公开 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`。`SUPABASE_SERVICE_ROLE_KEY` 与 `OPENROUTER_API_KEY` 只能放在服务端环境变量里。
 
-## VPS 部署
+## 本地开发
 
-### 1. 准备条件
-
-- 一台安装了 Docker Engine 和 Docker Compose Plugin 的 Linux VPS
-- 一个已解析到 VPS 公网 IP 的域名，例如 `images.example.com`
-- Supabase 项目 URL、publishable key 和 service-role secret
-- OpenRouter API key
-- VPS 的 TCP `80`、`443` 端口和 UDP `443` 端口可访问
-
-Docker 安装请使用 [Docker 官方安装文档](https://docs.docker.com/engine/install/)。建议 Ubuntu 22.04/24.04、Debian 12 或同等环境，至少 1 核 CPU、1 GB 内存。
-
-### 2. 拉取项目
+需要 Node.js 22。
 
 ```bash
-git clone https://github.com/G061206/imagecreater.git
-cd imagecreater
-```
-
-### 3. 配置 Supabase 数据库
-
-新 Supabase 项目需要在 SQL Editor 中按文件名顺序执行：
-
-```text
-supabase/migrations/202606220001_profiles.sql
-supabase/migrations/202606220002_harden_profile_security.sql
-supabase/migrations/202606220003_generation_pipeline.sql
-supabase/migrations/202606220004_profile_update_and_indexes.sql
-supabase/migrations/202606220005_consolidate_profile_update_policy.sql
-supabase/migrations/202606220006_server_only_admin_updates.sql
-```
-
-本仓库当前关联的新加坡 Supabase 项目已经执行过这些迁移。更换项目时才需要重新执行。
-
-在 Supabase Dashboard 完成以下设置：
-
-1. 在 Authentication 中启用 Email provider。
-2. 生产环境保持邮箱确认开启，并配置自定义 SMTP。
-3. 将 Authentication URL Configuration 的 Site URL 设置为 `https://images.example.com`。
-4. 将 `https://images.example.com` 加入 Redirect URLs。
-5. 建议在 Authentication 的密码安全设置中启用泄露密码保护。
-
-### 4. 配置前端公开变量
-
-```bash
+npm ci
 cp .env.example .env
-nano .env
+cp server/.env.example server/.env
+npm run dev
 ```
+
+常用脚本：
+
+```bash
+npm run dev         # 同时启动 Vite 和 Express
+npm run dev:app     # 只启动前端
+npm run dev:server  # 只启动服务端
+npm run build       # 构建前端
+npm run check       # 服务端语法检查 + 前端生产构建
+npm start           # 启动 Express 生产服务
+```
+
+本地完整生图需要有效的 Supabase 项目、service-role key、OpenRouter key，以及已经执行过的数据库迁移。
+
+## 环境变量
+
+根目录 `.env` 用于 Docker/Caddy 和前端构建：
 
 ```env
 SITE_ADDRESS=images.example.com
@@ -84,16 +73,7 @@ VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=your-publishable-key
 ```
 
-`SITE_ADDRESS` 只写域名，不要带 `https://` 或路径。`VITE_SUPABASE_ANON_KEY` 可以填写 Supabase 当前推荐的 publishable key。
-
-### 5. 配置服务端密钥
-
-```bash
-cp server/.env.example server/.env
-nano server/.env
-```
-
-至少修改：
+`server/.env` 用于服务端：
 
 ```env
 NODE_ENV=production
@@ -110,44 +90,31 @@ MAX_CONCURRENT_GENERATIONS=4
 LOG_LEVEL=info
 ```
 
-注意：
+不要把 service-role key 或 OpenRouter key 写进任何 `VITE_` 变量。曾经贴到聊天、日志或公开页面里的 OpenRouter key 应立即轮换。
 
-- 不要把 `SUPABASE_SERVICE_ROLE_KEY` 或 `OPENROUTER_API_KEY` 写入任何 `VITE_` 变量。
-- `.env` 和 `server/.env` 已被 Git 忽略，不要强制提交。
-- 曾经粘贴到聊天、日志或公开页面的 OpenRouter key 必须先轮换。
+## 配置 Supabase 数据库
 
-### 6. 启动
+新 Supabase 项目需要按文件名顺序执行全部迁移：
 
-```bash
-docker compose build --pull
-docker compose up -d
-docker compose ps
+```text
+supabase/migrations/202606220001_profiles.sql
+supabase/migrations/202606220002_harden_profile_security.sql
+supabase/migrations/202606220003_generation_pipeline.sql
+supabase/migrations/202606220004_profile_update_and_indexes.sql
+supabase/migrations/202606220005_consolidate_profile_update_policy.sql
+supabase/migrations/202606220006_server_only_admin_updates.sql
+supabase/migrations/202606230001_add_grok_imagine_model.sql
 ```
 
-查看日志：
+随后在 Supabase Dashboard 中配置：
 
-```bash
-docker compose logs -f --tail=200 app
-docker compose logs -f --tail=100 caddy
-```
+1. Authentication 启用 Email provider。
+2. 生产环境开启邮箱确认，并配置自定义 SMTP。
+3. Site URL 设置为生产站点，例如 `https://images.example.com`。
+4. Redirect URLs 加入生产站点域名。
+5. 建议启用泄露密码保护。
 
-验证：
-
-```bash
-curl -fsS https://images.example.com/api/health
-```
-
-正常返回：
-
-```json
-{"status":"ok","database":"ok"}
-```
-
-健康检查验证应用与 Supabase 数据库连接。OpenRouter 连接可在管理员后台的“API 配置”页面检查，或登录后实际生成一张图片。
-
-### 7. 创建管理员
-
-先通过网站注册并完成邮箱确认，然后在 Supabase SQL Editor 执行：
+创建首个管理员：先通过网站注册并确认邮箱，然后在 SQL Editor 执行：
 
 ```sql
 update public.profiles
@@ -155,92 +122,86 @@ set role = 'admin'
 where email = 'your-email@example.com';
 ```
 
-重新登录后，账户菜单会显示管理员后台。
+重新登录后即可进入管理后台。
 
-## 更新版本
+## VPS 部署
+
+准备一台安装 Docker Engine 与 Docker Compose Plugin 的 Linux VPS，并将域名解析到 VPS 公网 IP。确保 TCP `80/443` 和 UDP `443` 可访问。
+
+```bash
+git clone https://github.com/G061206/imagecreater.git
+cd imagecreater
+cp .env.example .env
+cp server/.env.example server/.env
+# 编辑 .env 和 server/.env
+docker compose build --pull
+docker compose up -d
+docker compose ps
+curl -fsS https://images.example.com/api/health
+```
+
+健康检查正常返回：
+
+```json
+{"status":"ok","database":"ok"}
+```
+
+更新版本：
 
 ```bash
 git pull --ff-only
 docker compose build --pull app
 docker compose up -d app
-docker compose ps
 curl -fsS https://images.example.com/api/health
 ```
 
-只修改 `server/.env` 时不需要重新构建：
+只修改 `server/.env` 时不需要重建镜像：
 
 ```bash
 docker compose up -d --force-recreate app
 ```
 
-## 备份与恢复
-
-业务数据和生成图片位于 Supabase，不在 VPS 容器内。部署前建议：
-
-- 在 Supabase 配置数据库备份策略
-- 定期备份 `public` schema 和 Storage 对象
-- 安全保存 `.env`、`server/.env` 和域名 DNS 配置
-
-Caddy 证书数据存放在 Docker volume `caddy_data`，即使重建应用容器也不会丢失。
-
 ## 常见问题
-
-### 网站打不开
-
-确认 DNS 已解析、VPS 防火墙开放 `80/443`，然后检查：
-
-```bash
-docker compose ps
-docker compose logs --tail=200 caddy
-docker compose logs --tail=200 app
-```
 
 ### `/api/health` 返回 503
 
-检查 `server/.env` 中的 `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY`，以及 Supabase 项目是否处于 ACTIVE_HEALTHY 状态。
+检查 `server/.env` 中的 `SUPABASE_URL` 和 `SUPABASE_SERVICE_ROLE_KEY`，以及 Supabase 项目是否处于健康状态。
 
 ### 登录后无法生成
 
 依次检查：
 
 1. OpenRouter key 是否有效且有余额。
-2. 用户状态是否为 `active` 且积分足够。
-3. `ai_models` 表中的模型是否启用。
-4. OpenRouter 当前是否仍提供对应模型 ID。
+2. 用户状态是否为 `active`，积分是否足够。
+3. `ai_models` 表中的目标模型是否启用。
+4. OpenRouter 当前是否仍支持对应模型 ID 和输出模态。
 5. `docker compose logs app` 中的供应商错误。
 
-### 修改 `.env` 后前端仍是旧配置
+### GPT Image 扣费但没有图片
 
-根目录 `.env` 中的 `VITE_` 变量是在镜像构建阶段写入的，必须重新构建：
+GPT Image 系列应调用 OpenRouter `/api/v1/images`，返回通常在 `data[].b64_json`。如果部署版本仍走 `/chat/completions`，请更新到包含 GPT Image endpoint 分流的版本。
+
+### Grok 返回 output modalities 错误
+
+`x-ai/grok-imagine-image-quality` 需要请求 `modalities: ["image"]`，不要同时请求 `text`。
+
+### 修改前端环境变量后仍是旧配置
+
+根目录 `.env` 中的 `VITE_` 变量在镜像构建阶段写入，需要重新构建：
 
 ```bash
 docker compose build --no-cache app
 docker compose up -d app
 ```
 
-### Caddy 无法签发证书
-
-确认域名已指向当前 VPS、`80/443` 未被其他服务占用，并检查 Caddy 日志。DNS 刚修改时需要等待解析生效。
-
-## 本地校验
-
-安装 Node.js 22 后执行：
-
-```bash
-npm ci
-npm run check
-```
-
-`npm run check` 会检查服务端语法并生成前端生产构建。本地完整运行仍需要有效的 Supabase 与 OpenRouter 服务端环境变量。
-
 ## 安全说明
 
-- 所有公开表均启用 RLS。
-- 普通用户只能更新自己的昵称和头像。
-- 角色、套餐、额度和账户状态只能通过管理员服务端接口修改。
+- 所有业务表启用 RLS。
+- 普通用户只能更新自己的显示名称和头像。
+- 角色、套餐、积分和账户状态只能通过管理员服务端接口修改。
 - 生成图片所在 Storage bucket 为私有桶。
-- 服务端容器以非 root 用户运行，并使用只读文件系统。
-- 请定期轮换 OpenRouter 和 Supabase 服务端密钥。
+- 服务端容器使用非 root 用户运行，并启用只读文件系统。
+- 定期轮换 OpenRouter 和 Supabase 服务端密钥。
 
 ## License
 

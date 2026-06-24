@@ -30,6 +30,19 @@ function outputModalities(modelId) {
   return modelId.startsWith("x-ai/grok-imagine") ? ["image"] : ["image", "text"];
 }
 
+function usesImagesEndpoint(modelId) {
+  return modelId.startsWith("openai/") && modelId.includes("image");
+}
+
+function imageEndpointPayload(input) {
+  const prompt = [input.prompt, input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
+  return {
+    model: input.modelId,
+    prompt,
+    n: input.count,
+  };
+}
+
 function providerPayload(input) {
   const prompt = [input.prompt, "Return the generated image as an image output in the response. Do not return only a text description.", input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
   const content = input.referenceImages?.length
@@ -91,7 +104,7 @@ function collectImageCandidates(value, output, seen = new Set()) {
   if (value.image_url?.url) collectImageCandidates(value.image_url.url, output, seen);
   if (value.source?.data && /^image\//.test(value.source?.media_type || "")) output.push(dataUrlFromBase64(value.source.data, value.source.media_type));
 
-  for (const key of ["data", "images", "content", "image", "image_url", "output", "outputs", "output_image", "generated_image", "result", "results", "response"]) {
+  for (const key of ["choices", "message", "data", "images", "content", "text", "image", "image_url", "output", "outputs", "output_image", "generated_image", "result", "results", "response"]) {
     if (value[key] && !(typeof value[key] === "string" && ["data", "image", "result"].includes(key))) collectImageCandidates(value[key], output, seen);
   }
 }
@@ -101,7 +114,7 @@ function describeProviderShape(value, depth = 0, seen = new Set()) {
   if (typeof value === "string") return value.length > 80 ? "string(" + value.length + ")" : "string";
   if (typeof value !== "object") return typeof value;
   if (seen.has(value)) return "[circular]";
-  if (depth >= 3) return Array.isArray(value) ? "array(" + value.length + ")" : "object";
+  if (depth >= 5) return Array.isArray(value) ? "array(" + value.length + ")" : "object";
   seen.add(value);
   if (Array.isArray(value)) return value.slice(0, 3).map((item) => describeProviderShape(item, depth + 1, seen));
   return Object.fromEntries(Object.entries(value).slice(0, 20).map(([key, item]) => [key, describeProviderShape(item, depth + 1, seen)]));
@@ -150,11 +163,14 @@ export async function generateForUser(userId, input) {
   const timeout = setTimeout(() => controller.abort(), config.REQUEST_TIMEOUT_MS);
   try {
     reservation = await reserve(userId, input);
-    const response = await fetch(`${config.OPENROUTER_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+    const baseUrl = config.OPENROUTER_BASE_URL.replace(/\/$/, "");
+    const endpoint = usesImagesEndpoint(input.modelId) ? `${baseUrl}/images` : `${baseUrl}/chat/completions`;
+    const requestBody = usesImagesEndpoint(input.modelId) ? imageEndpointPayload(input) : providerPayload(input);
+    const response = await fetch(endpoint, {
       method: "POST",
       signal: controller.signal,
       headers: { Authorization: `Bearer ${config.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": config.APP_URL || "http://localhost", "X-Title": config.APP_NAME },
-      body: JSON.stringify(providerPayload(input)),
+      body: JSON.stringify(requestBody),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload?.error?.message || `OpenRouter request failed (${response.status})`);
