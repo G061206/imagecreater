@@ -120,32 +120,35 @@ function buildGrokImagineQualityRequest(input) {
 }
 
 function buildFluxKontextRequest(input) {
+  return buildImageOnlyChatRequest(input, "flux-kontext-max");
+}
+
+function buildFlux2KleinRequest(input) {
+  return buildImageOnlyChatRequest(input, "flux-2-klein-4b");
+}
+
+function buildSeedream45Request(input) {
+  return buildImageOnlyChatRequest(input, "seedream-4-5");
+}
+
+function buildFlux2MaxRequest(input) {
+  return buildImageOnlyChatRequest(input, "flux-2-max");
+}
+
+function buildImageOnlyChatRequest(input, label) {
   return {
-    label: "flux-kontext-max",
+    label,
     endpointPath: "/chat/completions",
     body: {
       model: input.modelId,
       messages: [{ role: "user", content: chatContent(input) }],
-      modalities: ["image", "text"],
-      max_tokens: config.OPENROUTER_MAX_TOKENS,
+      modalities: ["image"],
       image_config: chatImageConfig(input),
       quality: QUALITY_MAP[input.quality] || "standard",
       n: input.count,
     },
     extractImages: extractChatCompletionImages,
   };
-}
-
-function buildFlux2KleinRequest(input) {
-  return buildChatImageModelRequest(input, "flux-2-klein-4b");
-}
-
-function buildSeedream45Request(input) {
-  return buildChatImageModelRequest(input, "seedream-4-5");
-}
-
-function buildFlux2MaxRequest(input) {
-  return buildChatImageModelRequest(input, "flux-2-max");
 }
 
 function buildChatImageModelRequest(input, label) {

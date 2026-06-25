@@ -34,10 +34,10 @@ Prism Image Studio 是一个多用户 AI 图像生成工作台。前端使用 Re
 | `x-ai/grok-imagine-image-quality` | `/api/v1/chat/completions` | 只请求 `modalities: ["image"]`，避免 image+text endpoint 不存在。 |
 | `google/gemini-3.1-flash-image` | `/api/v1/chat/completions` | 请求 `modalities: ["image", "text"]`；当前测试环境曾返回区域不可用。 |
 | `google/gemini-3-pro-image` | `/api/v1/chat/completions` | 同 Gemini 图像分支；当前测试环境曾返回区域不可用。 |
-| `black-forest-labs/flux.1-kontext-max` | `/api/v1/chat/completions` | 独立 FLUX Kontext 分支，使用 image+text 输出。 |
-| `black-forest-labs/flux.2-klein-4b` | `/api/v1/chat/completions` | 独立 FLUX 2 分支，使用 image+text 输出。 |
-| `bytedance-seed/seedream-4.5` | `/api/v1/chat/completions` | 独立 Seedream 分支，使用 image+text 输出。 |
-| `black-forest-labs/flux.2-max` | `/api/v1/chat/completions` | 独立 FLUX 2 分支，使用 image+text 输出。 |
+| `black-forest-labs/flux.1-kontext-max` | `/api/v1/chat/completions` | 独立 FLUX Kontext 分支，只请求 `modalities: ["image"]`。 |
+| `black-forest-labs/flux.2-klein-4b` | `/api/v1/chat/completions` | 独立 FLUX 2 分支，只请求 `modalities: ["image"]`。 |
+| `bytedance-seed/seedream-4.5` | `/api/v1/chat/completions` | 独立 Seedream 分支，只请求 `modalities: ["image"]`。 |
+| `black-forest-labs/flux.2-max` | `/api/v1/chat/completions` | 独立 FLUX 2 分支，只请求 `modalities: ["image"]`。 |
 
 旧模型 ID `openai/gpt-5.4-image-2` 会在后端自动规范化为 `openai/gpt-image-2`，用于兼容前端缓存或旧任务参数。
 
@@ -210,6 +210,10 @@ GPT Image 2 必须使用模型 ID `openai/gpt-image-2` 并调用 `/api/v1/images
 ### Grok 返回 output modalities 错误
 
 `x-ai/grok-imagine-image-quality` 需要请求 `modalities: ["image"]`，不要同时请求 `text`。
+
+### FLUX / Seedream 返回 output modalities 错误
+
+`black-forest-labs/flux.1-kontext-max`、`black-forest-labs/flux.2-klein-4b`、`black-forest-labs/flux.2-max` 和 `bytedance-seed/seedream-4.5` 现在都走独立 image-only 分支，只请求 `modalities: ["image"]`。如果仍然失败，优先检查 OpenRouter 当前账号是否对应模型 ID 可用，以及生产服务是否已部署到包含 image-only 分支的版本。
 
 ### Gemini/Nano Banana 返回区域不可用
 
