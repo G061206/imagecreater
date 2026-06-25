@@ -17,6 +17,9 @@ values
   ('google/gemini-3.1-flash-image', 'Nano Banana 2', 'Google', '快速', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9'], array['1K','2K','4K'], array['标准','高清','超高清'], 8),
   ('google/gemini-3-pro-image', 'Nano Banana Pro', 'Google', '专业', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9'], array['1K','2K','4K'], array['标准','高清','超高清'], 16),
   ('openai/gpt-image-2', 'GPT Image 2', 'OpenAI', '精细', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9'], array['1024','1536','2048'], array['标准','高清','超高清'], 14),
+  ('black-forest-labs/flux.2-klein-4b', 'FLUX.2 Klein 4B', 'Black Forest Labs', 'Klein', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9'], array['1K','2K','4K'], array['标准','高清','超高清'], 8),
+  ('bytedance-seed/seedream-4.5', 'Seedream 4.5', 'ByteDance Seed', 'Seedream', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9'], array['1K','2K','4K'], array['标准','高清','超高清'], 10),
+  ('black-forest-labs/flux.2-max', 'FLUX.2 Max', 'Black Forest Labs', 'Max', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9'], array['1K','2K','4K'], array['标准','高清','超高清'], 16),
   ('x-ai/grok-imagine-image-quality', 'Grok Imagine Image Quality', 'xAI', 'Quality', array['1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9'], array['1K','2K','4K'], array['标准','高清','超高清'], 12)
 on conflict (id) do update set
   name = excluded.name,

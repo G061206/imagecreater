@@ -77,6 +77,39 @@ const DEFAULT_MODELS = [
     cost: 9,
   },
   {
+    id: "black-forest-labs/flux.2-klein-4b",
+    name: "FLUX.2 Klein 4B",
+    provider: "Black Forest Labs",
+    badge: "Klein",
+    enabled: true,
+    ratios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+    sizes: ["1K", "2K", "4K"],
+    qualities: ["标准", "高清", "超高清"],
+    cost: 8,
+  },
+  {
+    id: "bytedance-seed/seedream-4.5",
+    name: "Seedream 4.5",
+    provider: "ByteDance Seed",
+    badge: "Seedream",
+    enabled: true,
+    ratios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+    sizes: ["1K", "2K", "4K"],
+    qualities: ["标准", "高清", "超高清"],
+    cost: 10,
+  },
+  {
+    id: "black-forest-labs/flux.2-max",
+    name: "FLUX.2 Max",
+    provider: "Black Forest Labs",
+    badge: "Max",
+    enabled: true,
+    ratios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
+    sizes: ["1K", "2K", "4K"],
+    qualities: ["标准", "高清", "超高清"],
+    cost: 16,
+  },
+  {
     id: "x-ai/grok-imagine-image-quality",
     name: "Grok Imagine Image Quality",
     provider: "xAI",
@@ -462,8 +495,8 @@ function Canvas({ result, onClear }) {
   }
   return (
     <main className="canvas result-canvas">
-      <div className="canvas-toolbar"><div><IconButton label="重新生成" onClick={() => { window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: result.prompt })); appNotify("Previous prompt restored."); }}><ArrowCounterClockwise size={18} /></IconButton><IconButton label="复制" onClick={() => { navigator.clipboard?.writeText(result.prompt); appNotify("Prompt copied."); }}><Copy size={18} /></IconButton><IconButton label="下载" onClick={() => { const link = document.createElement("a"); link.href = selectedAsset?.url || result.imageUrl; link.download = (result.taskId || "prism-image") + "-" + (selectedAssetIndex + 1) + ".png"; link.target = "_blank"; document.body.appendChild(link); link.click(); link.remove(); appNotify("Image download started."); }}><DownloadSimple size={18} /></IconButton><IconButton label="删除" onClick={onClear}><Trash size={18} /></IconButton></div><div className="zoom-control"><button onClick={() => setZoom(Math.max(50, zoom - 10))}>−</button><span>{zoom}%</span><button onClick={() => setZoom(Math.min(150, zoom + 10))}>+</button></div></div>
-      <div className="image-stage"><img src={selectedAsset?.url} alt={result.prompt} style={{ width: `${zoom}%` }} /></div>
+      <div className="canvas-toolbar"><div><IconButton label="重新生成" onClick={() => { window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: result.prompt })); appNotify("Previous prompt restored."); }}><ArrowCounterClockwise size={18} /></IconButton><IconButton label="复制" onClick={() => { navigator.clipboard?.writeText(result.prompt); appNotify("Prompt copied."); }}><Copy size={18} /></IconButton><IconButton label="下载" onClick={() => { const link = document.createElement("a"); link.href = selectedAsset?.url || result.imageUrl; link.download = (result.taskId || "prism-image") + "-" + (selectedAssetIndex + 1) + ".png"; link.target = "_blank"; document.body.appendChild(link); link.click(); link.remove(); appNotify("Image download started."); }}><DownloadSimple size={18} /></IconButton><IconButton label="删除" onClick={onClear}><Trash size={18} /></IconButton></div><div className="zoom-control"><button onClick={() => setZoom((value) => Math.max(50, value - 10))} disabled={zoom <= 50}>{"\u2212"}</button><span>{zoom}%</span><button onClick={() => setZoom((value) => Math.min(150, value + 10))} disabled={zoom >= 150}>+</button></div></div>
+      <div className="image-stage"><img src={selectedAsset?.url} alt={result.prompt} style={{ maxWidth: `${zoom}%`, maxHeight: `${zoom}%` }} /></div>
       {assets.length > 1 && <div className="result-thumbnails">{assets.map((asset, index) => <button key={asset.url} className={index === selectedAssetIndex ? "active" : ""} onClick={() => setSelectedAssetIndex(index)} aria-label={`查看第 ${index + 1} 张`}><img src={asset.url} alt="" /></button>)}</div>}
       <div className="result-meta"><div><span className="status-dot" /><strong>{result.model}</strong><span>{result.ratio} · {result.size} · {result.quality} · {assets.length} 张</span></div><span>{result.createdAt}</span></div>
     </main>

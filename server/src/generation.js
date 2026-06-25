@@ -136,9 +136,21 @@ function buildFluxKontextRequest(input) {
   };
 }
 
-function buildGenericChatImageRequest(input) {
+function buildFlux2KleinRequest(input) {
+  return buildChatImageModelRequest(input, "flux-2-klein-4b");
+}
+
+function buildSeedream45Request(input) {
+  return buildChatImageModelRequest(input, "seedream-4-5");
+}
+
+function buildFlux2MaxRequest(input) {
+  return buildChatImageModelRequest(input, "flux-2-max");
+}
+
+function buildChatImageModelRequest(input, label) {
   return {
-    label: "generic-chat-image",
+    label,
     endpointPath: "/chat/completions",
     body: {
       model: input.modelId,
@@ -153,6 +165,10 @@ function buildGenericChatImageRequest(input) {
   };
 }
 
+function buildGenericChatImageRequest(input) {
+  return buildChatImageModelRequest(input, "generic-chat-image");
+}
+
 const MODEL_CALLERS = new Map([
   ["openai/gpt-image-2", buildOpenAiGptImage2Request],
   ["google/gemini-3.1-flash-image", buildGeminiFlashImageRequest],
@@ -160,6 +176,9 @@ const MODEL_CALLERS = new Map([
   ["google/gemini-2.5-flash-image-preview", buildGeminiPreviewImageRequest],
   ["x-ai/grok-imagine-image-quality", buildGrokImagineQualityRequest],
   ["black-forest-labs/flux.1-kontext-max", buildFluxKontextRequest],
+  ["black-forest-labs/flux.2-klein-4b", buildFlux2KleinRequest],
+  ["bytedance-seed/seedream-4.5", buildSeedream45Request],
+  ["black-forest-labs/flux.2-max", buildFlux2MaxRequest],
 ]);
 
 function buildModelRequest(input) {
