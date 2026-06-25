@@ -49,10 +49,10 @@ const DEFAULT_MODELS = [
     provider: "OpenAI",
     badge: "精细",
     enabled: true,
-    ratios: ["1:1", "3:2", "2:3", "16:9", "9:16"],
+    ratios: ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
     sizes: ["1024", "1536", "2048"],
     qualities: ["标准", "高清", "超高清"],
-    cost: 12,
+    cost: 14,
   },
   {
     id: "google/gemini-2.5-flash-image-preview",
@@ -301,7 +301,7 @@ function SelectField({ label, value, children, onChange }) {
   );
 }
 
-function PromptPanel({ models, onGenerated }) {
+function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
   const activeModels = models.filter((model) => model.enabled);
   const [modelId, setModelId] = useState(activeModels[0]?.id || "");
   const model = activeModels.find((item) => item.id === modelId) || activeModels[0] || DEFAULT_MODELS[0];
@@ -344,43 +344,72 @@ function PromptPanel({ models, onGenerated }) {
   }
 
   async function generate() {
-    if (!prompt.trim()) {
-      setError("先写下你想生成的画面");
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      setError("\u5148\u5199\u4e0b\u4f60\u60f3\u751f\u6210\u7684\u753b\u9762");
       return;
     }
-    setStatus("loading");
+    const clientRequestId = "client-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+    const createdAt = new Date().toISOString();
+    const requestBody = {
+      modelId: model.id,
+      prompt: trimmedPrompt,
+      ratio,
+      size,
+      quality,
+      count,
+      referenceImages,
+      negativePrompt: negative,
+      clientRequestId,
+      ...(seed ? { seed: Number(seed) } : {}),
+    };
+    const pendingTask = {
+      id: clientRequestId,
+      model_id: model.id,
+      prompt: trimmedPrompt,
+      parameters: { ratio, size, quality, reference_count: referenceImages.length, negative_prompt: negative || null, seed: seed ? Number(seed) : null, client_request_id: clientRequestId },
+      image_count: count,
+      status: "processing",
+      credit_cost: model.cost * count,
+      created_at: createdAt,
+      completed_at: null,
+      assets: [],
+      local: true,
+    };
+    setStatus("queued");
     setError("");
+    onQueued?.(pendingTask);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      if (!token) throw new Error("登录状态已失效，请重新登录");
+      if (!token) throw new Error("\u767b\u5f55\u72b6\u6001\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55");
       const response = await fetch("/api/generations", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          modelId: model.id,
-          prompt,
-          ratio,
-          size,
-          quality,
-          count,
-          referenceImages,
-          negativePrompt: negative,
-          ...(seed ? { seed: Number(seed) } : {}),
-        }),
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify(requestBody),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || `请求失败 (${response.status})`);
+      if (!response.ok) throw new Error(payload?.error || "\u8bf7\u6c42\u5931\u8d25 (" + response.status + ")");
       const assets = Array.isArray(payload.assets) ? payload.assets.filter((asset) => asset?.url) : [];
-      if (!assets.length) throw new Error("生成任务完成，但没有可显示的图片");
-      onGenerated({ assets, imageUrl: assets[0].url, prompt, model: model.name, ratio, size, quality, taskId: payload.taskId, creditCost: payload.creditCost, creditsRemaining: payload.creditsRemaining, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) });
+      if (!assets.length) throw new Error("\u751f\u6210\u4efb\u52a1\u5b8c\u6210\uff0c\u4f46\u6ca1\u6709\u53ef\u663e\u793a\u7684\u56fe\u7247");
+      const completedAt = new Date().toISOString();
+      const completedTask = {
+        ...pendingTask,
+        id: payload.taskId,
+        status: "completed",
+        credit_cost: payload.creditCost,
+        completed_at: completedAt,
+        assets,
+        local: false,
+      };
+      onGenerated({ assets, imageUrl: assets[0].url, prompt: trimmedPrompt, model: model.name, ratio, size, quality, taskId: payload.taskId, creditCost: payload.creditCost, creditsRemaining: payload.creditsRemaining, createdAt: new Date(completedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) }, clientRequestId, completedTask);
       setStatus("success");
     } catch (requestError) {
       setError(requestError.message);
       setStatus("error");
+      onFailed?.(clientRequestId, requestError.message);
     }
   }
-
   return (
     <aside className="prompt-panel">
       <div className="panel-heading"><div><SlidersHorizontal size={18} /><strong>生成设置</strong></div><div><IconButton label="服务端安全托管" onClick={() => appNotify("Secrets are kept on the server side.")}><ShieldCheck size={19} /></IconButton></div></div>
@@ -407,7 +436,7 @@ function PromptPanel({ models, onGenerated }) {
         {error && <div className="inline-error"><WarningCircle size={18} /><span>{error}</span></div>}
       </div>
       <div className="generate-footer">
-        <button className="generate-button" disabled={status === "loading"} onClick={generate}>{status === "loading" ? <><span className="spinner" />正在生成</> : <><Sparkle size={18} weight="fill" />生成图像<span className="credit-pill">{model.cost * count}</span></>}</button>
+        <button className="generate-button" disabled={status === "queued"} onClick={generate}>{status === "queued" ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{model.cost * count}</span></>}</button>
         <p><ShieldCheck size={13} />OpenRouter 由服务端安全托管</p>
       </div>
     </aside>
@@ -504,8 +533,13 @@ function CreatorApp({ models }) {
   const [generationTasks, setGenerationTasks] = useState([]);
   const [tasksLoading, setTasksLoading] = useState(false);
 
+  function isClientTaskId(id) {
+    return String(id).startsWith("client-");
+  }
+
   async function deleteTasks(ids) {
-    await Promise.all(ids.map((id) => fetchWithAuth(`/api/generations/${encodeURIComponent(id)}`, { method: "DELETE" })));
+    const remoteIds = ids.filter((id) => !isClientTaskId(id));
+    await Promise.all(remoteIds.map((id) => fetchWithAuth(`/api/generations/${encodeURIComponent(id)}`, { method: "DELETE" })));
     setGenerationTasks((items) => items.filter((task) => !ids.includes(task.id)));
     setResult((current) => current && ids.includes(current.taskId) ? null : current);
   }
@@ -514,7 +548,12 @@ function CreatorApp({ models }) {
     setTasksLoading(true);
     try {
       const payload = await fetchWithAuth("/api/generations");
-      setGenerationTasks(payload.tasks || []);
+      const remoteTasks = payload.tasks || [];
+      const remoteClientIds = new Set(remoteTasks.map((task) => task.parameters?.client_request_id).filter(Boolean));
+      setGenerationTasks((current) => [
+        ...current.filter((task) => isClientTaskId(task.id) && !remoteClientIds.has(task.id)),
+        ...remoteTasks,
+      ]);
     } catch (error) {
       appNotify(error.message, "error");
     } finally {
@@ -531,11 +570,22 @@ function CreatorApp({ models }) {
 
   const queueCount = generationTasks.filter((task) => task.status === "processing" || task.status === "reserved").length;
   const selectTask = (taskResult) => { setResult(taskResult); setView("create"); };
-  const generated = (nextResult) => { setResult(nextResult); loadTasks(); };
+  const queued = (task) => {
+    setGenerationTasks((items) => [task, ...items.filter((item) => item.id !== task.id)]);
+    appNotify("\u5df2\u52a0\u5165\u751f\u6210\u961f\u5217");
+  };
+  const generated = (nextResult, clientRequestId, completedTask) => {
+    setResult(nextResult);
+    setGenerationTasks((items) => [completedTask, ...items.filter((item) => item.id !== clientRequestId && item.id !== completedTask.id)]);
+    loadTasks();
+  };
+  const failed = (clientRequestId, errorMessage) => {
+    setGenerationTasks((items) => items.map((task) => task.id === clientRequestId ? { ...task, status: "failed", error_message: errorMessage, completed_at: new Date().toISOString() } : task));
+  };
   return (
     <div className="creator-layout">
       <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
-      {view === "create" && <><Canvas result={result} onClear={() => setResult(null)} /><PromptPanel models={models} onGenerated={generated} /></>}
+      {view === "create" && <><Canvas result={result} onClear={() => setResult(null)} /><PromptPanel models={models} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
       {view === "library" && <LibraryView title="\u4f5c\u54c1\u5e93" emptyText="\u751f\u6210\u7684\u56fe\u50cf\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
       {view === "queue" && <LibraryView title="\u751f\u6210\u961f\u5217" emptyText="\u6ca1\u6709\u6392\u961f\u4e2d\u7684\u751f\u6210\u4efb\u52a1\u3002" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
     </div>

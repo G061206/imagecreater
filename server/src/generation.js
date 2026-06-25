@@ -13,6 +13,7 @@ export const generationSchema = z.object({
   referenceImages: z.array(z.string().regex(/^data:image\/(?:png|jpeg|webp);base64,/)).max(4).optional().default([]),
   negativePrompt: z.string().trim().max(1000).optional().default(""),
   seed: z.number().int().min(0).max(2147483647).optional(),
+  clientRequestId: z.string().min(1).max(100).regex(/^client-[A-Za-z0-9-]+$/).optional(),
 });
 
 class Semaphore {
@@ -26,37 +27,144 @@ class Semaphore {
 }
 const slots = new Semaphore(config.MAX_CONCURRENT_GENERATIONS);
 
-function outputModalities(modelId) {
-  return modelId.startsWith("x-ai/grok-imagine") ? ["image"] : ["image", "text"];
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const QUALITY_MAP = { 标准: "standard", 高清: "medium", 超高清: "high" };
+const LEGACY_MODEL_IDS = new Map([
+  ["openai/gpt-5.4-image-2", "openai/gpt-image-2"],
+]);
+
+function normalizeInput(input) {
+  return { ...input, modelId: LEGACY_MODEL_IDS.get(input.modelId) || input.modelId };
 }
 
-function usesImagesEndpoint(modelId) {
-  return modelId.startsWith("openai/") && modelId.includes("image");
+function openRouterBaseUrl() {
+  return config.OPENROUTER_BASE_URL.replace(/\/$/, "");
 }
 
-function imageEndpointPayload(input) {
-  const prompt = [input.prompt, input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
-  return {
-    model: input.modelId,
-    prompt,
-    n: input.count,
-  };
+function buildPrompt(input, { forceImageOutput = true } = {}) {
+  return [
+    input.prompt,
+    forceImageOutput ? "Return the generated image as an image output. Do not return only a text description." : "",
+    input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "",
+    input.seed !== undefined ? `Seed: ${input.seed}` : "",
+  ].filter(Boolean).join("\n");
 }
 
-function providerPayload(input) {
-  const prompt = [input.prompt, "Return the generated image as an image output in the response. Do not return only a text description.", input.negativePrompt ? `Avoid: ${input.negativePrompt}` : "", input.seed !== undefined ? `Seed: ${input.seed}` : ""].filter(Boolean).join("\n");
-  const content = input.referenceImages?.length
+function chatContent(input) {
+  const prompt = buildPrompt(input);
+  return input.referenceImages?.length
     ? [{ type: "text", text: prompt }, ...input.referenceImages.map((url) => ({ type: "image_url", image_url: { url } }))]
     : prompt;
+}
+
+function chatImageConfig(input) {
+  return { aspect_ratio: input.ratio, image_size: input.size };
+}
+
+function buildOpenAiGptImage2Request(input) {
   return {
-    model: input.modelId,
-    messages: [{ role: "user", content }],
-    modalities: outputModalities(input.modelId),
-    max_tokens: config.OPENROUTER_MAX_TOKENS,
-    image_config: { aspect_ratio: input.ratio, image_size: input.size },
-    quality: input.quality === "超高清" ? "high" : input.quality === "高清" ? "medium" : "standard",
-    n: input.count,
+    label: "openai-gpt-image-2",
+    endpointPath: "/images",
+    body: {
+      model: "openai/gpt-image-2",
+      prompt: buildPrompt(input, { forceImageOutput: false }),
+      n: input.count,
+    },
+    extractImages: extractImagesEndpointImages,
   };
+}
+
+function buildGeminiFlashImageRequest(input) {
+  return buildGeminiImageRequest(input, "gemini-flash-image");
+}
+
+function buildGeminiProImageRequest(input) {
+  return buildGeminiImageRequest(input, "gemini-pro-image");
+}
+
+function buildGeminiPreviewImageRequest(input) {
+  return buildGeminiImageRequest(input, "gemini-preview-image");
+}
+
+function buildGeminiImageRequest(input, label) {
+  return {
+    label,
+    endpointPath: "/chat/completions",
+    body: {
+      model: input.modelId,
+      messages: [{ role: "user", content: chatContent(input) }],
+      modalities: ["image", "text"],
+      max_tokens: config.OPENROUTER_MAX_TOKENS,
+      image_config: chatImageConfig(input),
+      quality: QUALITY_MAP[input.quality] || "standard",
+      n: input.count,
+    },
+    extractImages: extractChatCompletionImages,
+  };
+}
+
+function buildGrokImagineQualityRequest(input) {
+  return {
+    label: "grok-imagine-image-quality",
+    endpointPath: "/chat/completions",
+    body: {
+      model: "x-ai/grok-imagine-image-quality",
+      messages: [{ role: "user", content: chatContent(input) }],
+      modalities: ["image"],
+      image_config: chatImageConfig(input),
+      quality: QUALITY_MAP[input.quality] || "standard",
+      n: input.count,
+    },
+    extractImages: extractChatCompletionImages,
+  };
+}
+
+function buildFluxKontextRequest(input) {
+  return {
+    label: "flux-kontext-max",
+    endpointPath: "/chat/completions",
+    body: {
+      model: input.modelId,
+      messages: [{ role: "user", content: chatContent(input) }],
+      modalities: ["image", "text"],
+      max_tokens: config.OPENROUTER_MAX_TOKENS,
+      image_config: chatImageConfig(input),
+      quality: QUALITY_MAP[input.quality] || "standard",
+      n: input.count,
+    },
+    extractImages: extractChatCompletionImages,
+  };
+}
+
+function buildGenericChatImageRequest(input) {
+  return {
+    label: "generic-chat-image",
+    endpointPath: "/chat/completions",
+    body: {
+      model: input.modelId,
+      messages: [{ role: "user", content: chatContent(input) }],
+      modalities: ["image", "text"],
+      max_tokens: config.OPENROUTER_MAX_TOKENS,
+      image_config: chatImageConfig(input),
+      quality: QUALITY_MAP[input.quality] || "standard",
+      n: input.count,
+    },
+    extractImages: extractChatCompletionImages,
+  };
+}
+
+const MODEL_CALLERS = new Map([
+  ["openai/gpt-image-2", buildOpenAiGptImage2Request],
+  ["google/gemini-3.1-flash-image", buildGeminiFlashImageRequest],
+  ["google/gemini-3-pro-image", buildGeminiProImageRequest],
+  ["google/gemini-2.5-flash-image-preview", buildGeminiPreviewImageRequest],
+  ["x-ai/grok-imagine-image-quality", buildGrokImagineQualityRequest],
+  ["black-forest-labs/flux.1-kontext-max", buildFluxKontextRequest],
+]);
+
+function buildModelRequest(input) {
+  const build = MODEL_CALLERS.get(input.modelId) || buildGenericChatImageRequest;
+  return build(input);
 }
 
 function dataUrlFromBase64(value, mimeType = "image/png") {
@@ -69,7 +177,7 @@ function isLikelyBase64Image(value) {
 }
 
 function mimeFromValue(value, fallback = "image/png") {
-  return /^image\/(?:png|jpeg|webp)$/.test(value || "") ? value : fallback;
+  return IMAGE_MIME_TYPES.has(value || "") ? value : fallback;
 }
 
 function collectImageCandidates(value, output, seen = new Set()) {
@@ -109,6 +217,31 @@ function collectImageCandidates(value, output, seen = new Set()) {
   }
 }
 
+function uniqueImages(images) {
+  return [...new Set(images.filter(Boolean))];
+}
+
+function extractImagesEndpointImages(payload) {
+  const images = [];
+  for (const item of Array.isArray(payload?.data) ? payload.data : []) {
+    if (typeof item?.b64_json === "string") images.push(dataUrlFromBase64(item.b64_json, mimeFromValue(item.mime_type || item.mimeType)));
+    if (typeof item?.url === "string") images.push(item.url);
+  }
+  collectImageCandidates(payload, images);
+  return uniqueImages(images);
+}
+
+function extractChatCompletionImages(payload) {
+  const images = [];
+  for (const choice of Array.isArray(payload?.choices) ? payload.choices : []) {
+    const message = choice?.message || {};
+    collectImageCandidates(message.images, images);
+    collectImageCandidates(message.content, images);
+  }
+  collectImageCandidates(payload, images);
+  return uniqueImages(images);
+}
+
 function describeProviderShape(value, depth = 0, seen = new Set()) {
   if (value === null || value === undefined) return String(value);
   if (typeof value === "string") return value.length > 80 ? "string(" + value.length + ")" : "string";
@@ -120,10 +253,21 @@ function describeProviderShape(value, depth = 0, seen = new Set()) {
   return Object.fromEntries(Object.entries(value).slice(0, 20).map(([key, item]) => [key, describeProviderShape(item, depth + 1, seen)]));
 }
 
-function collectImages(payload) {
-  const images = [];
-  collectImageCandidates(payload, images);
-  return [...new Set(images.filter(Boolean))];
+async function callOpenRouter(modelRequest, signal) {
+  const response = await fetch(`${openRouterBaseUrl()}${modelRequest.endpointPath}`, {
+    method: "POST",
+    signal,
+    headers: {
+      Authorization: `Bearer ${config.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": config.APP_URL || "http://localhost",
+      "X-Title": config.APP_NAME,
+    },
+    body: JSON.stringify(modelRequest.body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error?.message || `OpenRouter ${modelRequest.label} request failed (${response.status})`);
+  return payload;
 }
 
 function decodeDataUrl(value) {
@@ -137,7 +281,7 @@ async function readImage(value, signal) {
   const response = await fetch(value, { signal, redirect: "follow" });
   if (!response.ok) throw new Error(`Generated image download failed (${response.status})`);
   const mimeType = response.headers.get("content-type")?.split(";")[0];
-  if (!new Set(["image/png", "image/jpeg", "image/webp"]).has(mimeType)) throw new Error("Provider returned an unsupported image format");
+  if (!IMAGE_MIME_TYPES.has(mimeType)) throw new Error("Provider returned an unsupported image format");
   return { mimeType, bytes: Buffer.from(await response.arrayBuffer()) };
 }
 
@@ -148,35 +292,27 @@ async function reserve(userId, input) {
     p_user_id: userId,
     p_model_id: input.modelId,
     p_prompt: input.prompt,
-    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null },
+    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null, client_request_id: input.clientRequestId || null },
     p_image_count: input.count,
   });
   if (error) throw new Error(error.message);
   return data;
 }
 
-export async function generateForUser(userId, input) {
+export async function generateForUser(userId, rawInput) {
   await slots.acquire();
+  const input = normalizeInput(rawInput);
   let reservation;
   const uploaded = [];
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.REQUEST_TIMEOUT_MS);
   try {
     reservation = await reserve(userId, input);
-    const baseUrl = config.OPENROUTER_BASE_URL.replace(/\/$/, "");
-    const endpoint = usesImagesEndpoint(input.modelId) ? `${baseUrl}/images` : `${baseUrl}/chat/completions`;
-    const requestBody = usesImagesEndpoint(input.modelId) ? imageEndpointPayload(input) : providerPayload(input);
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { Authorization: `Bearer ${config.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": config.APP_URL || "http://localhost", "X-Title": config.APP_NAME },
-      body: JSON.stringify(requestBody),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.error?.message || `OpenRouter request failed (${response.status})`);
-    const images = collectImages(payload);
-    if (!images.length) throw new Error(`The model returned no recognizable image. Response shape: ${JSON.stringify(describeProviderShape(payload))}`);
-    if (images.length < input.count) throw new Error(`The model returned ${images.length} image(s), but ${input.count} were requested`);
+    const modelRequest = buildModelRequest(input);
+    const payload = await callOpenRouter(modelRequest, controller.signal);
+    const images = modelRequest.extractImages(payload);
+    if (!images.length) throw new Error(`The ${modelRequest.label} call returned no recognizable image. Endpoint: ${modelRequest.endpointPath}. Response shape: ${JSON.stringify(describeProviderShape(payload))}`);
+    if (images.length < input.count) throw new Error(`The ${modelRequest.label} call returned ${images.length} image(s), but ${input.count} were requested`);
 
     for (const image of images.slice(0, input.count)) {
       const { mimeType, bytes } = await readImage(image, controller.signal);

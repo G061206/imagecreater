@@ -1,19 +1,43 @@
 # Prism Image Studio
 
-Prism Image Studio 是一个面向多用户的 AI 图像生成工作台。前端使用 React + Vite，服务端使用 Express 统一代理 OpenRouter 请求，并通过 Supabase Auth、PostgreSQL/RLS 和私有 Storage 完成登录、计费、任务记录与作品库管理。
+Prism Image Studio 是一个多用户 AI 图像生成工作台。前端使用 React + Vite，后端使用 Express 代理 OpenRouter 图像模型，并通过 Supabase Auth、PostgreSQL/RLS、RPC 和私有 Storage 处理登录、扣费、任务记录、作品库和管理员后台。
+
+## 当前状态
+
+- 前端：React 19 + Vite，包含创作台、生成队列、作品库、账户设置和管理员后台。
+- 后端：Express API，所有 OpenRouter 和 Supabase service-role 操作都在服务端完成。
+- 数据库：Supabase Auth + public/private schema + RLS + RPC 扣费流程。
+- 存储：生成图片写入私有 Supabase Storage bucket，通过短期签名 URL 展示。
+- 部署：Docker Compose + Caddy，可部署到 VPS 并自动申请 HTTPS。
 
 ## 已实装功能
 
 - 邮箱注册、登录、找回密码、密码恢复和账户资料设置。
-- 普通用户与管理员角色隔离，管理员可管理用户角色、套餐、积分和账户状态。
-- OpenRouter 服务端代理生图，浏览器不接触 `OPENROUTER_API_KEY`。
-- 支持 Gemini/Nano Banana、GPT-5.4 Image 2、Grok Imagine Image Quality 等数据库模型配置。
-- GPT Image 系列走 OpenRouter `/images` endpoint，其他图像模型走 `/chat/completions`，并兼容 `choices[].message.images`、`data[].b64_json`、data URL 和远程图片 URL 等返回形态。
-- 生成前预扣积分，失败时自动回滚积分；成功后记录任务、供应商成本和生成资产。
-- 图片写入私有 Supabase Storage，并通过短期签名 URL 展示。
+- 普通用户与管理员角色隔离。
+- 管理员可管理用户角色、套餐、积分、账户状态和模型启停。
+- 生成前预扣积分，失败自动退回积分，成功记录供应商成本和生成资产。
+- 点击生成后立即在生成队列插入本地任务；后端完成后用真实任务替换，失败则在队列中标记失败。
 - 作品库支持搜索、筛选、选择、多选删除和刷新。
 - 管理后台包含总览、用户管理、模型中心、API 健康检查、计费汇总和请求日志。
-- Docker Compose + Caddy 部署，支持自动 HTTPS。
+- OpenRouter key 只存在于服务端环境变量，浏览器不会接触密钥。
+
+## 模型调用策略
+
+后端在 `server/src/generation.js` 中按模型 ID 单独构造请求，不再把所有模型混进同一个通用 payload。
+
+| 模型 | Endpoint | 关键逻辑 |
+| --- | --- | --- |
+| `openai/gpt-image-2` | `/api/v1/images` | 使用 OpenRouter Images API，解析 `data[].b64_json` 或 URL。 |
+| `x-ai/grok-imagine-image-quality` | `/api/v1/chat/completions` | 只请求 `modalities: ["image"]`，避免 image+text endpoint 不存在。 |
+| `google/gemini-3.1-flash-image` | `/api/v1/chat/completions` | 请求 `modalities: ["image", "text"]`，但当前测试 key/地区返回区域不可用。 |
+| `google/gemini-3-pro-image` | `/api/v1/chat/completions` | 同上，当前测试 key/地区返回区域不可用。 |
+| `black-forest-labs/flux.1-kontext-max` | `/api/v1/chat/completions` | 保留独立分支，使用 image+text 输出。 |
+
+旧的 `openai/gpt-5.4-image-2` 会在后端自动规范化为 `openai/gpt-image-2`，避免前端缓存旧 ID 时直接失败。线上 Supabase 已启用 `openai/gpt-image-2` 并停用旧 GPT 模型。
+
+## 费用提醒
+
+OpenRouter 图片模型的实际扣费可能和响应里的 `usage.cost` 字段不一致。一次真实 GPT Image 2 测试曾在响应中显示约 `0.007` 美元，但 OpenRouter 控制台实际扣费约 `0.225` 美元。后续验证建议优先做 dry-run 或小预算确认，不要只依赖接口返回的 `usage.cost` 判断账单。
 
 ## 项目结构
 
@@ -21,7 +45,7 @@ Prism Image Studio 是一个面向多用户的 AI 图像生成工作台。前端
 app/                  React/Vite 前端
 server/               Express API、OpenRouter 代理、Supabase service-role 操作
 supabase/migrations/  数据库、RLS、RPC、Storage bucket 和模型种子数据
-deploy/Caddyfile      生产反向代理与 HTTPS
+deploy/Caddyfile      Caddy 反向代理与 HTTPS
 scripts/dev.mjs       本地前后端开发启动脚本
 compose.yaml          VPS 部署编排
 ```
@@ -37,7 +61,7 @@ Express API
   `-- OpenRouter image endpoints
 ```
 
-生产环境中只有前端公开 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`。`SUPABASE_SERVICE_ROLE_KEY` 与 `OPENROUTER_API_KEY` 只能放在服务端环境变量里。
+生产环境中只有前端公开 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`。`SUPABASE_SERVICE_ROLE_KEY` 与 `OPENROUTER_API_KEY` 只能放在 `server/.env` 或 VPS 的服务端环境变量中。
 
 ## 本地开发
 
@@ -92,9 +116,9 @@ LOG_LEVEL=info
 
 不要把 service-role key 或 OpenRouter key 写进任何 `VITE_` 变量。曾经贴到聊天、日志或公开页面里的 OpenRouter key 应立即轮换。
 
-## 配置 Supabase 数据库
+## Supabase 初始化
 
-新 Supabase 项目需要按文件名顺序执行全部迁移：
+新 Supabase 项目需要按文件名顺序执行迁移：
 
 ```text
 supabase/migrations/202606220001_profiles.sql
@@ -104,6 +128,7 @@ supabase/migrations/202606220004_profile_update_and_indexes.sql
 supabase/migrations/202606220005_consolidate_profile_update_policy.sql
 supabase/migrations/202606220006_server_only_admin_updates.sql
 supabase/migrations/202606230001_add_grok_imagine_model.sql
+supabase/migrations/202606250001_use_gpt_image_2.sql
 ```
 
 随后在 Supabase Dashboard 中配置：
@@ -161,7 +186,7 @@ curl -fsS https://images.example.com/api/health
 docker compose up -d --force-recreate app
 ```
 
-## 常见问题
+## 排障
 
 ### `/api/health` 返回 503
 
@@ -174,16 +199,24 @@ docker compose up -d --force-recreate app
 1. OpenRouter key 是否有效且有余额。
 2. 用户状态是否为 `active`，积分是否足够。
 3. `ai_models` 表中的目标模型是否启用。
-4. OpenRouter 当前是否仍支持对应模型 ID 和输出模态。
+4. OpenRouter 当前是否仍支持对应模型 ID、endpoint 和输出模态。
 5. `docker compose logs app` 中的供应商错误。
 
 ### GPT Image 扣费但没有图片
 
-GPT Image 系列应调用 OpenRouter `/api/v1/images`，返回通常在 `data[].b64_json`。如果部署版本仍走 `/chat/completions`，请更新到包含 GPT Image endpoint 分流的版本。
+GPT Image 2 使用模型 ID `openai/gpt-image-2`，必须调用 OpenRouter `/api/v1/images`。返回通常在 `data[].b64_json`。如果部署版本仍走 `/chat/completions`，请更新到包含 GPT Image endpoint 分流和最新模型迁移的版本。
 
 ### Grok 返回 output modalities 错误
 
 `x-ai/grok-imagine-image-quality` 需要请求 `modalities: ["image"]`，不要同时请求 `text`。
+
+### Gemini/Nano Banana 返回区域不可用
+
+当前测试中，`google/gemini-3.1-flash-image`、`google/gemini-3-pro-image` 和 `google/gemini-2.5-flash-image` 均在当前 key/请求地区返回 `This model is not available in your region.`。这不是图片解析问题，建议在管理后台停用 Gemini，或换用当前服务器地区可用的供应商模型。
+
+### 点击生成后队列不更新
+
+前端会立即插入 `client-*` 临时任务，并在后端返回后按 `client_request_id` 合并真实任务。如果仍看不到队列项，检查浏览器控制台和 `/api/generations` 请求是否被鉴权拦截。
 
 ### 修改前端环境变量后仍是旧配置
 
