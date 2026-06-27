@@ -122,6 +122,12 @@ const DEFAULT_MODELS = [
   },
 ];
 
+const QUALITY_CREDIT_MULTIPLIERS = { "\u6807\u51c6": 1, "\u9ad8\u6e05": 2, "\u8d85\u9ad8\u6e05": 4 };
+
+function calculateCreditCost(model, quality, count = 1) {
+  return (model?.cost || 0) * (QUALITY_CREDIT_MULTIPLIERS[quality] || 1) * count;
+}
+
 const NAV_ITEMS = [
   { id: "create", label: "创作", icon: PaintBrush },
   { id: "library", label: "作品库", icon: SquaresFour },
@@ -371,6 +377,7 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
   const [error, setError] = useState("");
   const [queuedNotice, setQueuedNotice] = useState(false);
   const queuedNoticeTimer = useRef(null);
+  const estimatedCreditCost = calculateCreditCost(model, quality, count);
 
   useEffect(() => {
     setRatio(model.ratios[0]);
@@ -435,7 +442,7 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
       parameters: { ratio, size, quality, reference_count: referenceImages.length, negative_prompt: negative || null, seed: seed ? Number(seed) : null, client_request_id: clientRequestId },
       image_count: count,
       status: "processing",
-      credit_cost: model.cost * count,
+      credit_cost: estimatedCreditCost,
       created_at: createdAt,
       completed_at: null,
       assets: [],
@@ -496,13 +503,13 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
           <SelectField label="分辨率" value={size} onChange={setSize}>{model.sizes.map((item) => <option key={item}>{item}</option>)}</SelectField>
           <SelectField label="生成数量" value={count} onChange={(value) => setCount(Number(value))}>{[1, 2, 3, 4].map((item) => <option key={item} value={item}>{item} 张</option>)}</SelectField>
         </div>
-        <div className="control-group"><div className="control-title"><span>品质</span><small>预计 {model.cost * count} 积分</small></div><Segmented options={model.qualities} value={quality} onChange={setQuality} /></div>
+        <div className="control-group"><div className="control-title"><span>品质</span><small>预计 {estimatedCreditCost} 积分</small></div><Segmented options={model.qualities} value={quality} onChange={setQuality} /></div>
         <button className="advanced-toggle" onClick={() => setAdvanced((value) => !value)}><span><SlidersHorizontal size={17} />高级参数</span><CaretDown className={advanced ? "rotate" : ""} size={16} /></button>
         {advanced && <div className="advanced-fields"><label className="field block"><span>排除内容</span><input value={negative} onChange={(event) => setNegative(event.target.value)} placeholder="模糊、文字、水印…" /></label><label className="field block"><span>随机种子</span><input type="number" value={seed} onChange={(event) => setSeed(event.target.value)} placeholder="自动" /></label></div>}
         {error && <div className="inline-error"><WarningCircle size={18} /><span>{error}</span></div>}
       </div>
       <div className="generate-footer">
-        <button className="generate-button" onClick={generate}>{queuedNotice ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{model.cost * count}</span></>}</button>
+        <button className="generate-button" onClick={generate}>{queuedNotice ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{estimatedCreditCost}</span></>}</button>
         <p><ShieldCheck size={13} />OpenRouter 由服务端安全托管</p>
       </div>
     </aside>
@@ -691,6 +698,7 @@ function CreatorApp({ models }) {
     const size = sourceResult?.size && sourceResult.size !== "-" ? sourceResult.size : model.sizes[0];
     const quality = sourceResult?.quality && sourceResult.quality !== "-" ? sourceResult.quality : model.qualities[0];
     const prompt = buildEditPrompt(sourceResult, editTurns, instruction);
+    const creditCost = calculateCreditCost(model, quality, 1);
     const pendingTask = {
       id: clientRequestId,
       model_id: model.id,
@@ -698,7 +706,7 @@ function CreatorApp({ models }) {
       parameters: { ratio, size, quality, reference_count: 1, edit_source_task_id: sourceResult?.taskId || null, edit_instruction: instruction, client_request_id: clientRequestId },
       image_count: 1,
       status: "processing",
-      credit_cost: model.cost,
+      credit_cost: creditCost,
       created_at: createdAt,
       completed_at: null,
       assets: [],
@@ -986,7 +994,7 @@ export function App() {
           full_name: session.user.user_metadata?.full_name,
           role: "user",
           plan: "free",
-          credits: 100,
+          credits: 0,
           status: "active",
         });
         setProfileLoading(false);

@@ -329,16 +329,22 @@ export async function generateForUser(userId, rawInput) {
   let reservation;
   const uploaded = [];
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), config.REQUEST_TIMEOUT_MS * input.count);
   try {
     reservation = await reserve(userId, input);
-    const modelRequest = buildModelRequest(input);
-    const payload = await callOpenRouter(modelRequest, controller.signal);
-    const images = modelRequest.extractImages(payload);
-    if (!images.length) throw new Error(`The ${modelRequest.label} call returned no recognizable image. Endpoint: ${modelRequest.endpointPath}. Response shape: ${JSON.stringify(describeProviderShape(payload))}`);
-    if (images.length < input.count) throw new Error(`The ${modelRequest.label} call returned ${images.length} image(s), but ${input.count} were requested`);
+    const providerPayloads = [];
+    const images = [];
+    for (let index = 0; index < input.count; index += 1) {
+      const requestInput = { ...input, count: 1, ...(input.seed !== undefined ? { seed: input.seed + index } : {}) };
+      const modelRequest = buildModelRequest(requestInput);
+      const payload = await callOpenRouter(modelRequest, controller.signal);
+      providerPayloads.push(payload);
+      const payloadImages = modelRequest.extractImages(payload);
+      if (!payloadImages.length) throw new Error(`The ${modelRequest.label} call returned no recognizable image. Endpoint: ${modelRequest.endpointPath}. Response shape: ${JSON.stringify(describeProviderShape(payload))}`);
+      images.push(payloadImages[0]);
+    }
 
-    for (const image of images.slice(0, input.count)) {
+    for (const image of images) {
       const { mimeType, bytes } = await readImage(image, controller.signal);
       if (bytes.length > 20 * 1024 * 1024) throw new Error("Generated image exceeds 20 MB");
       const storagePath = `${userId}/${reservation.task_id}/${crypto.randomUUID()}.${extensionFor(mimeType)}`;
@@ -349,7 +355,9 @@ export async function generateForUser(userId, rawInput) {
 
     const { error: assetError } = await supabaseAdmin.from("generation_assets").insert(uploaded.map((asset) => ({ task_id: reservation.task_id, storage_path: asset.storagePath, mime_type: asset.mimeType, byte_size: asset.byteSize })));
     if (assetError) throw assetError;
-    const { error: completeError } = await supabaseAdmin.rpc("complete_generation_task", { p_task_id: reservation.task_id, p_provider_request_ids: payload.id ? [String(payload.id)] : [], p_provider_cost: Number(payload?.usage?.cost ?? 0) || null });
+    const providerRequestIds = providerPayloads.map((payload) => payload?.id).filter(Boolean).map(String);
+    const providerCost = providerPayloads.reduce((sum, payload) => sum + (Number(payload?.usage?.cost ?? 0) || 0), 0);
+    const { error: completeError } = await supabaseAdmin.rpc("complete_generation_task", { p_task_id: reservation.task_id, p_provider_request_ids: providerRequestIds, p_provider_cost: providerCost || null });
     if (completeError) throw completeError;
 
     const assets = await Promise.all(uploaded.map(async (asset) => {

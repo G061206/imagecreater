@@ -109,6 +109,14 @@ async function loadAdminData() {
   return { profiles: profilesResult.data || [], tasks: tasksResult.data || [], models: modelsResult.data || [] };
 }
 
+async function ensureUserProfile(user) {
+  const profile = { id: user.id, email: user.email || "" };
+  const fullName = user.user_metadata?.full_name;
+  if (fullName) profile.full_name = fullName;
+  const { error } = await supabaseAdmin.from("profiles").upsert(profile, { onConflict: "id" });
+  if (error) throw error;
+}
+
 async function requireAdmin(request, response, next) {
   const { data, error } = await supabaseAdmin.from("profiles").select("role,status").eq("id", request.user.id).maybeSingle();
   if (error) return next(error);
@@ -276,6 +284,7 @@ app.delete("/api/generations/:id", authenticate, async (request, response, next)
 
 app.post("/api/generations", authenticate, async (request, response, next) => {
   try {
+    await ensureUserProfile(request.user);
     const result = await generateForUser(request.user.id, generationSchema.parse(request.body));
     response.status(201).json(result);
   } catch (error) { next(error); }
@@ -300,9 +309,15 @@ app.get("/{*path}", (_request, response) => response.sendFile(path.join(dist, "i
 app.use((error, request, response, _next) => {
   request.log.error({ err: error }, "request failed");
   if (error?.name === "ZodError") return response.status(400).json({ error: "Invalid generation parameters", details: error.issues });
-  const message = error?.name === "AbortError" ? "Generation timed out" : error?.message || "Internal server error";
-  const status = /INSUFFICIENT_CREDITS/.test(message) ? 402 : /MODEL_UNAVAILABLE/.test(message) ? 400 : 500;
-  return response.status(status).json({ error: message });
+  const rawMessage = error?.name === "AbortError" ? "Generation timed out" : error?.message || "Internal server error";
+  const code = /INSUFFICIENT_CREDITS_OR_INACTIVE/.test(rawMessage) ? "INSUFFICIENT_CREDITS_OR_INACTIVE" : /MODEL_UNAVAILABLE/.test(rawMessage) ? "MODEL_UNAVAILABLE" : null;
+  const message = code === "INSUFFICIENT_CREDITS_OR_INACTIVE"
+    ? "????????????????/???????????/?????"
+    : code === "MODEL_UNAVAILABLE"
+      ? "??????????????????????????"
+      : rawMessage;
+  const status = code === "INSUFFICIENT_CREDITS_OR_INACTIVE" ? 402 : code === "MODEL_UNAVAILABLE" ? 400 : 500;
+  return response.status(status).json({ error: message, ...(code ? { code } : {}) });
 });
 
 const server = app.listen(config.PORT, "0.0.0.0", () => logger.info({ port: config.PORT }, "Prism server listening"));
