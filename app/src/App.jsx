@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowCounterClockwise,
   ArrowDown,
@@ -219,6 +219,25 @@ function readReferenceFile(file) {
   });
 }
 
+function createClientRequestId() {
+  return "client-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+function buildEditPrompt(sourceResult, turns, instruction) {
+  const previousTurns = turns
+    .filter((turn) => turn.status === "completed")
+    .slice(-5)
+    .map((turn, index) => String(index + 1) + ". " + turn.instruction)
+    .join("\n");
+  return [
+    "Edit the provided reference image. Preserve the subject identity, composition, lighting, and style unless the user explicitly asks to change them.",
+    sourceResult?.prompt ? "Original prompt: " + sourceResult.prompt : "",
+    previousTurns ? "Previous edit instructions:\n" + previousTurns : "",
+    "Current edit instruction: " + instruction,
+    "Return only the revised image output.",
+  ].filter(Boolean).join("\n").slice(0, 2000);
+}
+
 function generationTaskToResult(task, models) {
   const asset = task.assets?.[0];
   const parameters = task.parameters || {};
@@ -228,6 +247,7 @@ function generationTaskToResult(task, models) {
     imageUrl: asset?.url,
     prompt: task.prompt,
     model: model?.name || task.model_id,
+    modelId: task.model_id,
     ratio: parameters.ratio || "-",
     size: parameters.size || "-",
     quality: parameters.quality || "-",
@@ -349,6 +369,8 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
   const [negative, setNegative] = useState("");
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
+  const [queuedNotice, setQueuedNotice] = useState(false);
+  const queuedNoticeTimer = useRef(null);
 
   useEffect(() => {
     setRatio(model.ratios[0]);
@@ -364,6 +386,16 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
     window.addEventListener("prism:set-prompt", applyPrompt);
     return () => window.removeEventListener("prism:set-prompt", applyPrompt);
   }, [setPrompt]);
+
+  useEffect(() => {
+    return () => window.clearTimeout(queuedNoticeTimer.current);
+  }, []);
+
+  function flashQueuedNotice() {
+    setQueuedNotice(true);
+    window.clearTimeout(queuedNoticeTimer.current);
+    queuedNoticeTimer.current = window.setTimeout(() => setQueuedNotice(false), 900);
+  }
 
   async function loadReferenceImages(event) {
     const files = Array.from(event.target.files || []).slice(0, 4);
@@ -382,7 +414,7 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
       setError("\u5148\u5199\u4e0b\u4f60\u60f3\u751f\u6210\u7684\u753b\u9762");
       return;
     }
-    const clientRequestId = "client-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+    const clientRequestId = createClientRequestId();
     const createdAt = new Date().toISOString();
     const requestBody = {
       modelId: model.id,
@@ -409,9 +441,10 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
       assets: [],
       local: true,
     };
-    setStatus("queued");
+    setStatus("idle");
     setError("");
     onQueued?.(pendingTask);
+    flashQueuedNotice();
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
@@ -436,7 +469,7 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
         local: false,
       };
       onGenerated({ assets, imageUrl: assets[0].url, prompt: trimmedPrompt, model: model.name, ratio, size, quality, taskId: payload.taskId, creditCost: payload.creditCost, creditsRemaining: payload.creditsRemaining, createdAt: new Date(completedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) }, clientRequestId, completedTask);
-      setStatus("success");
+      setStatus("idle");
     } catch (requestError) {
       setError(requestError.message);
       setStatus("error");
@@ -469,39 +502,69 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
         {error && <div className="inline-error"><WarningCircle size={18} /><span>{error}</span></div>}
       </div>
       <div className="generate-footer">
-        <button className="generate-button" disabled={status === "queued"} onClick={generate}>{status === "queued" ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{model.cost * count}</span></>}</button>
+        <button className="generate-button" onClick={generate}>{queuedNotice ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{model.cost * count}</span></>}</button>
         <p><ShieldCheck size={13} />OpenRouter 由服务端安全托管</p>
       </div>
     </aside>
   );
 }
 
-function Canvas({ result, onClear }) {
+function Canvas({ result, onClear, onEdit, editTurns = [] }) {
   const [zoom, setZoom] = useState(100);
   const [selectedAssetIndex, setSelectedAssetIndex] = useState(0);
+  const [editInstruction, setEditInstruction] = useState("");
+  const [editError, setEditError] = useState("");
   const assets = result?.assets?.length ? result.assets : result?.imageUrl ? [{ url: result.imageUrl, mimeType: "image" }] : [];
   const selectedAsset = assets[Math.min(selectedAssetIndex, Math.max(assets.length - 1, 0))];
+  const editing = editTurns.some((turn) => turn.status === "processing");
 
-  useEffect(() => { setSelectedAssetIndex(0); }, [result?.taskId]);
+  useEffect(() => { setSelectedAssetIndex(0); setEditInstruction(""); setEditError(""); }, [result?.taskId]);
+
+  async function submitEdit() {
+    const instruction = editInstruction.trim();
+    if (!instruction) {
+      setEditError("\u5199\u4e0b\u8fd9\u4e00\u8f6e\u60f3\u4fee\u6539\u7684\u5185\u5bb9");
+      return;
+    }
+    if (!selectedAsset?.url) {
+      setEditError("\u5f53\u524d\u6ca1\u6709\u53ef\u4fee\u6539\u7684\u56fe\u50cf");
+      return;
+    }
+    setEditError("");
+    try {
+      await onEdit?.({ instruction, sourceResult: result, referenceAsset: selectedAsset });
+      setEditInstruction("");
+    } catch (error) {
+      setEditError(error.message);
+    }
+  }
 
   if (!result) {
     return (
       <main className="canvas empty-canvas">
-        <div className="canvas-toolbar"><div><button className="tool-active" onClick={() => appNotify("Generated images will appear here.")}><MagnifyingGlass size={18} /></button><button disabled title="Generate an image first"><ArrowCounterClockwise size={18} /></button></div><span>画布会自动适应生成比例</span></div>
-        <div className="empty-state"><span className="empty-icon"><ImageIcon size={27} /></span><h1>从一个想法开始</h1><p>描述你脑海中的画面，Prism 会调用最合适的模型将它呈现出来。</p><div className="suggestions"><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Commercial product photo of a transparent perfume bottle on wet black stone, side rim light, water droplets, shallow depth of field" }))}>产品摄影</button><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Rainy Tokyo street at night, neon reflections on wet pavement, cinematic framing, high contrast lighting" }))}>电影场景</button><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Futuristic mechanic character design, short jacket, tool belt, warm expression, clean concept art background" }))}>角色设定</button></div></div>
-        <div className="canvas-status"><span>准备就绪</span><span>自动保存</span></div>
+        <div className="canvas-toolbar"><div><button className="tool-active" onClick={() => appNotify("Generated images will appear here.")}><MagnifyingGlass size={18} /></button><button disabled title="Generate an image first"><ArrowCounterClockwise size={18} /></button></div><span>\u753b\u5e03\u4f1a\u81ea\u52a8\u9002\u5e94\u751f\u6210\u6bd4\u4f8b</span></div>
+        <div className="empty-state"><span className="empty-icon"><ImageIcon size={27} /></span><h1>\u4ece\u4e00\u4e2a\u60f3\u6cd5\u5f00\u59cb</h1><p>\u63cf\u8ff0\u4f60\u8111\u6d77\u4e2d\u7684\u753b\u9762\uff0cPrism \u4f1a\u8c03\u7528\u6700\u5408\u9002\u7684\u6a21\u578b\u5c06\u5b83\u5448\u73b0\u51fa\u6765\u3002</p><div className="suggestions"><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Commercial product photo of a transparent perfume bottle on wet black stone, side rim light, water droplets, shallow depth of field" }))}>\u4ea7\u54c1\u6444\u5f71</button><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Rainy Tokyo street at night, neon reflections on wet pavement, cinematic framing, high contrast lighting" }))}>\u7535\u5f71\u573a\u666f</button><button onClick={() => window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: "Futuristic mechanic character design, short jacket, tool belt, warm expression, clean concept art background" }))}>\u89d2\u8272\u8bbe\u5b9a</button></div></div>
+        <div className="canvas-status"><span>\u51c6\u5907\u5c31\u7eea</span><span>\u81ea\u52a8\u4fdd\u5b58</span></div>
       </main>
     );
   }
   return (
     <main className="canvas result-canvas">
-      <div className="canvas-toolbar"><div><IconButton label="重新生成" onClick={() => { window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: result.prompt })); appNotify("Previous prompt restored."); }}><ArrowCounterClockwise size={18} /></IconButton><IconButton label="复制" onClick={() => { navigator.clipboard?.writeText(result.prompt); appNotify("Prompt copied."); }}><Copy size={18} /></IconButton><IconButton label="下载" onClick={() => { const link = document.createElement("a"); link.href = selectedAsset?.url || result.imageUrl; link.download = (result.taskId || "prism-image") + "-" + (selectedAssetIndex + 1) + ".png"; link.target = "_blank"; document.body.appendChild(link); link.click(); link.remove(); appNotify("Image download started."); }}><DownloadSimple size={18} /></IconButton><IconButton label="删除" onClick={onClear}><Trash size={18} /></IconButton></div><div className="zoom-control"><button onClick={() => setZoom((value) => Math.max(50, value - 10))} disabled={zoom <= 50}>{"\u2212"}</button><span>{zoom}%</span><button onClick={() => setZoom((value) => Math.min(150, value + 10))} disabled={zoom >= 150}>+</button></div></div>
+      <div className="canvas-toolbar"><div><IconButton label="\u91cd\u65b0\u751f\u6210" onClick={() => { window.dispatchEvent(new CustomEvent("prism:set-prompt", { detail: result.prompt })); appNotify("Previous prompt restored."); }}><ArrowCounterClockwise size={18} /></IconButton><IconButton label="\u590d\u5236" onClick={() => { navigator.clipboard?.writeText(result.prompt); appNotify("Prompt copied."); }}><Copy size={18} /></IconButton><IconButton label="\u4e0b\u8f7d" onClick={() => { const link = document.createElement("a"); link.href = selectedAsset?.url || result.imageUrl; link.download = (result.taskId || "prism-image") + "-" + (selectedAssetIndex + 1) + ".png"; link.target = "_blank"; document.body.appendChild(link); link.click(); link.remove(); appNotify("Image download started."); }}><DownloadSimple size={18} /></IconButton><IconButton label="\u5220\u9664" onClick={onClear}><Trash size={18} /></IconButton></div><div className="zoom-control"><button onClick={() => setZoom((value) => Math.max(50, value - 10))} disabled={zoom <= 50}>{"\u2212"}</button><span>{zoom}%</span><button onClick={() => setZoom((value) => Math.min(150, value + 10))} disabled={zoom >= 150}>+</button></div></div>
       <div className="image-stage"><img src={selectedAsset?.url} alt={result.prompt} style={{ maxWidth: `${zoom}%`, maxHeight: `${zoom}%` }} /></div>
-      {assets.length > 1 && <div className="result-thumbnails">{assets.map((asset, index) => <button key={asset.url} className={index === selectedAssetIndex ? "active" : ""} onClick={() => setSelectedAssetIndex(index)} aria-label={`查看第 ${index + 1} 张`}><img src={asset.url} alt="" /></button>)}</div>}
-      <div className="result-meta"><div><span className="status-dot" /><strong>{result.model}</strong><span>{result.ratio} · {result.size} · {result.quality} · {assets.length} 张</span></div><span>{result.createdAt}</span></div>
+      <section className="edit-panel">
+        <div className="edit-panel-head"><div><strong>{"\u5bf9\u8bdd\u4fee\u56fe"}</strong><span>{"\u57fa\u4e8e\u5f53\u524d\u56fe\u7ee7\u7eed\u4fee\u6539"}</span></div>{editing && <span className="edit-live"><i />{"\u751f\u6210\u4e2d"}</span>}</div>
+        {editTurns.length > 0 && <div className="edit-turns">{editTurns.slice(-4).map((turn, index) => <div key={turn.id} className={"edit-turn " + turn.status}><b>{index + 1}</b><span>{turn.instruction}</span><small>{turn.status === "completed" ? "\u5df2\u5b8c\u6210" : turn.status === "failed" ? turn.error || "\u5931\u8d25" : "\u5904\u7406\u4e2d"}</small></div>)}</div>}
+        <textarea value={editInstruction} onChange={(event) => setEditInstruction(event.target.value)} placeholder="\u4f8b\u5982\uff1a\u4fdd\u7559\u9999\u6c34\u74f6\u4f53\uff0c\u628a\u80cc\u666f\u6539\u6210\u6696\u8272\u5927\u7406\u77f3\u53f0\u9762" />
+        {editError && <div className="edit-error"><WarningCircle size={14} />{editError}</div>}
+        <button className="edit-submit" disabled={editing || !editInstruction.trim()} onClick={submitEdit}>{editing ? <span className="spinner" /> : <PaperPlaneTilt size={16} weight="fill" />}{editing ? "\u6b63\u5728\u4fee\u6539" : "\u53d1\u9001\u4fee\u6539"}</button>
+      </section>
+      {assets.length > 1 && <div className="result-thumbnails">{assets.map((asset, index) => <button key={asset.url} className={index === selectedAssetIndex ? "active" : ""} onClick={() => setSelectedAssetIndex(index)} aria-label={`\u67e5\u770b\u7b2c ${index + 1} \u5f20`}><img src={asset.url} alt="" /></button>)}</div>}
+      <div className="result-meta"><div><span className="status-dot" /><strong>{result.model}</strong><span>{result.ratio}{" \u00b7 "}{result.size}{" \u00b7 "}{result.quality}{" \u00b7 "}{assets.length} {"\u5f20"}</span></div><span>{result.createdAt}</span></div>
     </main>
   );
 }
+
 
 function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], loading = false, queueOnly = false, onSelect, onRefresh, onDelete }) {
   const [query, setQuery] = useState("");
@@ -563,6 +626,7 @@ function CreatorApp({ models }) {
   const [view, setView] = useState("create");
   const [collapsed, setCollapsed] = useState(false);
   const [result, setResult] = useState(null);
+  const [editTurns, setEditTurns] = useState([]);
   const [generationTasks, setGenerationTasks] = useState([]);
   const [tasksLoading, setTasksLoading] = useState(false);
 
@@ -575,6 +639,7 @@ function CreatorApp({ models }) {
     await Promise.all(remoteIds.map((id) => fetchWithAuth(`/api/generations/${encodeURIComponent(id)}`, { method: "DELETE" })));
     setGenerationTasks((items) => items.filter((task) => !ids.includes(task.id)));
     setResult((current) => current && ids.includes(current.taskId) ? null : current);
+    setEditTurns((turns) => turns.filter((turn) => !ids.includes(turn.taskId)));
   }
 
   async function loadTasks() {
@@ -602,28 +667,82 @@ function CreatorApp({ models }) {
   }, []);
 
   const queueCount = generationTasks.filter((task) => task.status === "processing" || task.status === "reserved").length;
-  const selectTask = (taskResult) => { setResult(taskResult); setView("create"); };
+  const selectTask = (taskResult) => { setResult(taskResult); setEditTurns([]); setView("create"); };
   const queued = (task) => {
     setGenerationTasks((items) => [task, ...items.filter((item) => item.id !== task.id)]);
     appNotify("\u5df2\u52a0\u5165\u751f\u6210\u961f\u5217");
   };
   const generated = (nextResult, clientRequestId, completedTask) => {
     setResult(nextResult);
+    setEditTurns([]);
     setGenerationTasks((items) => [completedTask, ...items.filter((item) => item.id !== clientRequestId && item.id !== completedTask.id)]);
     loadTasks();
   };
   const failed = (clientRequestId, errorMessage) => {
     setGenerationTasks((items) => items.map((task) => task.id === clientRequestId ? { ...task, status: "failed", error_message: errorMessage, completed_at: new Date().toISOString() } : task));
   };
+
+  async function submitImageEdit({ instruction, sourceResult, referenceAsset }) {
+    const model = models.find((item) => item.id === sourceResult?.modelId) || models.find((item) => item.name === sourceResult?.model) || models.find((item) => item.enabled) || models[0];
+    if (!model) throw new Error("No available model for image editing");
+    const clientRequestId = createClientRequestId();
+    const createdAt = new Date().toISOString();
+    const ratio = sourceResult?.ratio && sourceResult.ratio !== "-" ? sourceResult.ratio : model.ratios[0];
+    const size = sourceResult?.size && sourceResult.size !== "-" ? sourceResult.size : model.sizes[0];
+    const quality = sourceResult?.quality && sourceResult.quality !== "-" ? sourceResult.quality : model.qualities[0];
+    const prompt = buildEditPrompt(sourceResult, editTurns, instruction);
+    const pendingTask = {
+      id: clientRequestId,
+      model_id: model.id,
+      prompt,
+      parameters: { ratio, size, quality, reference_count: 1, edit_source_task_id: sourceResult?.taskId || null, edit_instruction: instruction, client_request_id: clientRequestId },
+      image_count: 1,
+      status: "processing",
+      credit_cost: model.cost,
+      created_at: createdAt,
+      completed_at: null,
+      assets: [],
+      local: true,
+    };
+    queued(pendingTask);
+    setEditTurns((turns) => [...turns, { id: clientRequestId, instruction, status: "processing", createdAt }]);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("\u767b\u5f55\u72b6\u6001\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55");
+      const response = await fetch("/api/generations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ modelId: model.id, prompt, ratio, size, quality, count: 1, referenceImages: [referenceAsset.url], negativePrompt: "", clientRequestId, editSourceTaskId: sourceResult?.taskId, editInstruction: instruction }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error || "Request failed (" + response.status + ")");
+      const assets = Array.isArray(payload.assets) ? payload.assets.filter((asset) => asset?.url) : [];
+      if (!assets.length) throw new Error("\u4fee\u56fe\u4efb\u52a1\u5b8c\u6210\uff0c\u4f46\u6ca1\u6709\u53ef\u663e\u793a\u7684\u56fe\u7247");
+      const completedAt = new Date().toISOString();
+      const completedTask = { ...pendingTask, id: payload.taskId, status: "completed", credit_cost: payload.creditCost, completed_at: completedAt, assets, local: false };
+      const nextResult = { assets, imageUrl: assets[0].url, prompt, model: model.name, modelId: model.id, ratio, size, quality, taskId: payload.taskId, creditCost: payload.creditCost, creditsRemaining: payload.creditsRemaining, createdAt: new Date(completedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) };
+      setResult(nextResult);
+      setGenerationTasks((items) => [completedTask, ...items.filter((item) => item.id !== clientRequestId && item.id !== completedTask.id)]);
+      setEditTurns((turns) => turns.map((turn) => turn.id === clientRequestId ? { ...turn, status: "completed", taskId: payload.taskId } : turn));
+      loadTasks();
+    } catch (error) {
+      failed(clientRequestId, error.message);
+      setEditTurns((turns) => turns.map((turn) => turn.id === clientRequestId ? { ...turn, status: "failed", error: error.message } : turn));
+      throw error;
+    }
+  }
+
   return (
     <div className="creator-layout">
       <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
-      {view === "create" && <><Canvas result={result} onClear={() => setResult(null)} /><PromptPanel models={models} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
+      {view === "create" && <><Canvas result={result} onClear={() => { setResult(null); setEditTurns([]); }} onEdit={submitImageEdit} editTurns={editTurns} /><PromptPanel models={models} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
       {view === "library" && <LibraryView title="\u4f5c\u54c1\u5e93" emptyText="\u751f\u6210\u7684\u56fe\u50cf\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
       {view === "queue" && <LibraryView title="\u751f\u6210\u961f\u5217" emptyText="\u6ca1\u6709\u6392\u961f\u4e2d\u7684\u751f\u6210\u4efb\u52a1\u3002" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
     </div>
   );
 }
+
 
 function StatCard({ label, value, delta, icon: Icon }) {
   return <div className="stat-card"><div className="stat-icon"><Icon size={20} /></div><div><span>{label}</span><strong>{value}</strong><small>{delta}</small></div></div>;

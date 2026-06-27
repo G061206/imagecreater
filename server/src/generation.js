@@ -10,10 +10,12 @@ export const generationSchema = z.object({
   size: z.enum(["1K", "2K", "4K", "1024", "1536", "2048"]),
   quality: z.enum(["标准", "高清", "超高清"]),
   count: z.number().int().min(1).max(4),
-  referenceImages: z.array(z.string().regex(/^data:image\/(?:png|jpeg|webp);base64,/)).max(4).optional().default([]),
+  referenceImages: z.array(z.string().regex(/^(?:data:image\/(?:png|jpeg|webp);base64,|https?:\/\/)/)).max(4).optional().default([]),
   negativePrompt: z.string().trim().max(1000).optional().default(""),
   seed: z.number().int().min(0).max(2147483647).optional(),
   clientRequestId: z.string().min(1).max(100).regex(/^client-[A-Za-z0-9-]+$/).optional(),
+  editSourceTaskId: z.string().uuid().optional(),
+  editInstruction: z.string().trim().max(1000).optional(),
 });
 
 class Semaphore {
@@ -314,7 +316,7 @@ async function reserve(userId, input) {
     p_user_id: userId,
     p_model_id: input.modelId,
     p_prompt: input.prompt,
-    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null, client_request_id: input.clientRequestId || null },
+    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null, client_request_id: input.clientRequestId || null, edit_source_task_id: input.editSourceTaskId || null, edit_instruction: input.editInstruction || null },
     p_image_count: input.count,
   });
   if (error) throw new Error(error.message);

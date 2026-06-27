@@ -11,6 +11,7 @@ Prism Image Studio 是一个多用户 AI 图像生成工作台。前端使用 Re
 - 点击生成后立即向生成队列插入本地任务，后端完成后再合并为真实任务。
 - 作品库支持搜索、筛选、刷新、单选、多选和批量删除。
 - 画布支持多图缩略图切换、复制提示词、下载图片、清空结果和 50%-150% 缩放。
+- 画布支持对当前单张图进行多轮对话修改，每轮修图都会进入生成队列并保存为新作品。
 - 后端按模型 ID 分流 OpenRouter 请求，避免不同图像模型混用同一套 payload。
 - OpenRouter API key 和 Supabase service-role key 只存在服务端环境变量中，不暴露给浏览器。
 
@@ -203,6 +204,9 @@ docker compose up -d app
 4. OpenRouter 当前是否仍支持对应模型 ID、endpoint 和输出模态。
 5. `docker compose logs app` 中的供应商错误。
 
+### 单图多轮修改没有按预期生效
+
+对话修图会把当前图的签名 URL 作为参考图发给后端，同时将本轮指令和最近历史指令合成新 prompt。如果修图失败，先确认当前模型支持图像输入，以及生成任务的 `reference_count` 是否为 1。
 ### GPT Image 扣费但没有图片
 
 GPT Image 2 必须使用模型 ID `openai/gpt-image-2` 并调用 `/api/v1/images`。如果部署版本仍走 `/chat/completions`，请更新到包含 GPT Image endpoint 分流和最新模型迁移的版本。
