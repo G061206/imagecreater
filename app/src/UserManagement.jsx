@@ -52,7 +52,7 @@ export function UserManagement() {
   return (
     <div className="admin-page">
       <div className="page-title"><div><p>平台管理</p><h1>用户管理</h1><span>来自 Supabase Auth 与 PostgreSQL 的真实账户资料。</span></div><button className="button ghost" onClick={loadUsers}>刷新列表</button></div>
-      <div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索邮箱或名称" /></label><button onClick={() => setRoleFilter((value) => value === "all" ? "admin" : value === "admin" ? "user" : "all")}>{roleFilter === "all" ? "\u5168\u90e8\u89d2\u8272" : roleFilter === "admin" ? "\u7ba1\u7406\u5458" : "\u666e\u901a\u7528\u6237"}<CaretDown size={14} /></button></div>
+      <div className="table-toolbar"><label><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索邮箱或名称" /></label><button onClick={() => setRoleFilter((value) => value === "all" ? "admin" : value === "admin" ? "user" : "all")}>{roleFilter === "all" ? "全部角色" : roleFilter === "admin" ? "管理员" : "普通用户"}<CaretDown size={14} /></button></div>
       {error && <div className="config-note"><WarningCircle size={18} /><div><strong>无法加载用户</strong><p>{error}</p></div></div>}
       <section className="table-card"><table><thead><tr><th>用户</th><th>角色</th><th>套餐</th><th>剩余额度</th><th>状态</th></tr></thead><tbody>
         {loading && <tr><td colSpan="5"><div className="table-loading"><span className="spinner" />正在读取账户</div></td></tr>}
