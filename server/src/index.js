@@ -234,6 +234,42 @@ app.get("/api/admin/data/:type", authenticate, requireAdmin, async (request, res
   } catch (error) { next(error); }
 });
 
+const THUMBNAIL_TRANSFORM = { width: 180, height: 180, resize: "cover", quality: 60 };
+
+async function signGenerationAssets(assets = [], { thumbnailLimit = Infinity } = {}) {
+  const bucket = supabaseAdmin.storage.from("generated-images");
+  const validAssets = assets.filter((asset) => asset?.storage_path);
+  if (!validAssets.length) return [];
+
+  const paths = validAssets.map((asset) => asset.storage_path);
+  const originals = new Map();
+  const bulkSigned = await bucket.createSignedUrls(paths, 3600);
+  if (!bulkSigned.error) {
+    for (const item of bulkSigned.data || []) {
+      if (item.path && item.signedUrl) originals.set(item.path, item.signedUrl);
+    }
+  }
+
+  const signedAssets = await Promise.all(validAssets.map(async (asset, index) => {
+    let url = originals.get(asset.storage_path);
+    if (!url) {
+      const { data, error } = await bucket.createSignedUrl(asset.storage_path, 3600);
+      if (error) return null;
+      url = data?.signedUrl;
+    }
+    if (!url) return null;
+
+    let thumbnailUrl = url;
+    if (index < thumbnailLimit && /^image\//.test(asset.mime_type || "")) {
+      const { data } = await bucket.createSignedUrl(asset.storage_path, 3600, { transform: THUMBNAIL_TRANSFORM });
+      thumbnailUrl = data?.signedUrl || url;
+    }
+    return { url, thumbnailUrl, mimeType: asset.mime_type, byteSize: asset.byte_size };
+  }));
+
+  return signedAssets.filter(Boolean);
+}
+
 app.get("/api/generations", authenticate, async (request, response, next) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -243,13 +279,11 @@ app.get("/api/generations", authenticate, async (request, response, next) => {
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) throw error;
-    const tasks = await Promise.all((data || []).map(async (task) => {
-      const assets = await Promise.all((task.generation_assets || []).map(async (asset) => {
-        const { data: signed } = await supabaseAdmin.storage.from("generated-images").createSignedUrl(asset.storage_path, 3600);
-        return { url: signed?.signedUrl, mimeType: asset.mime_type, byteSize: asset.byte_size };
-      }));
-      return { ...task, generation_assets: undefined, assets: assets.filter((asset) => asset.url) };
-    }));
+    const tasks = await Promise.all((data || []).map(async (task) => ({
+      ...task,
+      generation_assets: undefined,
+      assets: await signGenerationAssets(task.generation_assets, { thumbnailLimit: 1 }),
+    })));
     response.json({ tasks });
   } catch (error) { next(error); }
 });
@@ -295,10 +329,7 @@ app.get("/api/generations/:id", authenticate, async (request, response, next) =>
     const { data: task, error } = await supabaseAdmin.from("generation_tasks").select("id,user_id,model_id,prompt,parameters,image_count,status,credit_cost,error_message,created_at,completed_at,generation_assets(storage_path,mime_type)").eq("id", request.params.id).eq("user_id", request.user.id).maybeSingle();
     if (error) throw error;
     if (!task) return response.status(404).json({ error: "Generation not found" });
-    const assets = await Promise.all((task.generation_assets || []).map(async (asset) => {
-      const { data } = await supabaseAdmin.storage.from("generated-images").createSignedUrl(asset.storage_path, 3600);
-      return { url: data?.signedUrl, mimeType: asset.mime_type };
-    }));
+    const assets = await signGenerationAssets(task.generation_assets);
     return response.json({ ...task, generation_assets: undefined, assets });
   } catch (error) { return next(error); }
 });
@@ -310,14 +341,16 @@ app.use((error, request, response, _next) => {
   request.log.error({ err: error }, "request failed");
   if (error?.name === "ZodError") return response.status(400).json({ error: "Invalid generation parameters", details: error.issues });
   const rawMessage = error?.name === "AbortError" ? "Generation timed out" : error?.message || "Internal server error";
-  const code = /INSUFFICIENT_CREDITS_OR_INACTIVE/.test(rawMessage) ? "INSUFFICIENT_CREDITS_OR_INACTIVE" : /MODEL_UNAVAILABLE/.test(rawMessage) ? "MODEL_UNAVAILABLE" : null;
-  const message = code === "INSUFFICIENT_CREDITS_OR_INACTIVE"
-    ? "????????????????/???????????/?????"
-    : code === "MODEL_UNAVAILABLE"
-      ? "??????????????????????????"
-      : rawMessage;
-  const status = code === "INSUFFICIENT_CREDITS_OR_INACTIVE" ? 402 : code === "MODEL_UNAVAILABLE" ? 400 : 500;
-  return response.status(status).json({ error: message, ...(code ? { code } : {}) });
+  const code = error?.code || (/INSUFFICIENT_CREDITS_OR_INACTIVE/.test(rawMessage) ? "INSUFFICIENT_CREDITS_OR_INACTIVE" : /MODEL_UNAVAILABLE/.test(rawMessage) ? "MODEL_UNAVAILABLE" : null);
+  const message = error?.code
+    ? rawMessage
+    : code === "INSUFFICIENT_CREDITS_OR_INACTIVE"
+      ? "\u8d26\u6237\u672a\u6fc0\u6d3b\u6216\u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff0c\u8bf7\u68c0\u67e5\u8d26\u6237\u72b6\u6001\u548c\u79ef\u5206\u4f59\u989d\u3002"
+      : code === "MODEL_UNAVAILABLE"
+        ? "\u8be5\u6a21\u578b\u5f53\u524d\u672a\u542f\u7528\u6216\u4e0d\u53ef\u7528\u3002"
+        : rawMessage;
+  const status = error?.status || (code === "INSUFFICIENT_CREDITS_OR_INACTIVE" ? 402 : code === "MODEL_UNAVAILABLE" ? 400 : 500);
+  return response.status(status).json({ error: message, ...(code ? { code } : {}), ...(error?.details ? { details: error.details } : {}) });
 });
 
 const server = app.listen(config.PORT, "0.0.0.0", () => logger.info({ port: config.PORT }, "Prism server listening"));

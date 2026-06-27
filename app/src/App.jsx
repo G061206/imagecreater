@@ -360,7 +360,7 @@ function SelectField({ label, value, children, onChange }) {
   );
 }
 
-function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
+function PromptPanel({ models, availableCredits = null, onQueued, onGenerated, onFailed }) {
   const activeModels = models.filter((model) => model.enabled);
   const [modelId, setModelId] = useState(activeModels[0]?.id || "");
   const model = activeModels.find((item) => item.id === modelId) || activeModels[0] || DEFAULT_MODELS[0];
@@ -378,6 +378,7 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
   const [queuedNotice, setQueuedNotice] = useState(false);
   const queuedNoticeTimer = useRef(null);
   const estimatedCreditCost = calculateCreditCost(model, quality, count);
+  const canAfford = availableCredits == null || availableCredits >= estimatedCreditCost;
 
   useEffect(() => {
     setRatio(model.ratios[0]);
@@ -419,6 +420,11 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
       setError("\u5148\u5199\u4e0b\u4f60\u60f3\u751f\u6210\u7684\u753b\u9762");
+      return;
+    }
+    if (!canAfford) {
+      setError(`\u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff1a\u5f53\u524d ${availableCredits ?? 0}\uff0c\u672c\u6b21\u9700\u8981 ${estimatedCreditCost}\u3002`);
+      setStatus("error");
       return;
     }
     const clientRequestId = createClientRequestId();
@@ -509,7 +515,7 @@ function PromptPanel({ models, onQueued, onGenerated, onFailed }) {
         {error && <div className="inline-error"><WarningCircle size={18} /><span>{error}</span></div>}
       </div>
       <div className="generate-footer">
-        <button className="generate-button" onClick={generate}>{queuedNotice ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{estimatedCreditCost}</span></>}</button>
+        <button className="generate-button" onClick={generate} disabled={!canAfford}>{queuedNotice ? <><Queue size={18} />{"\u5df2\u52a0\u5165\u961f\u5217"}</> : <><Sparkle size={18} weight="fill" />{"\u751f\u6210\u56fe\u50cf"}<span className="credit-pill">{estimatedCreditCost}</span></>}</button>
         <p><ShieldCheck size={13} />OpenRouter 由服务端安全托管</p>
       </div>
     </aside>
@@ -566,7 +572,7 @@ function Canvas({ result, onClear, onEdit, editTurns = [] }) {
         {editError && <div className="edit-error"><WarningCircle size={14} />{editError}</div>}
         <button className="edit-submit" disabled={editing || !editInstruction.trim()} onClick={submitEdit}>{editing ? <span className="spinner" /> : <PaperPlaneTilt size={16} weight="fill" />}{editing ? "\u6b63\u5728\u4fee\u6539" : "\u53d1\u9001\u4fee\u6539"}</button>
       </section>
-      {assets.length > 1 && <div className="result-thumbnails">{assets.map((asset, index) => <button key={asset.url} className={index === selectedAssetIndex ? "active" : ""} onClick={() => setSelectedAssetIndex(index)} aria-label={`\u67e5\u770b\u7b2c ${index + 1} \u5f20`}><img src={asset.url} alt="" /></button>)}</div>}
+      {assets.length > 1 && <div className="result-thumbnails">{assets.map((asset, index) => <button key={asset.url} className={index === selectedAssetIndex ? "active" : ""} onClick={() => setSelectedAssetIndex(index)} aria-label={`\u67e5\u770b\u7b2c ${index + 1} \u5f20`}><img src={asset.thumbnailUrl || asset.url} alt="" loading="lazy" decoding="async" /></button>)}</div>}
       <div className="result-meta"><div><span className="status-dot" /><strong>{result.model}</strong><span>{result.ratio}{" \u00b7 "}{result.size}{" \u00b7 "}{result.quality}{" \u00b7 "}{assets.length} {"\u5f20"}</span></div><span>{result.createdAt}</span></div>
     </main>
   );
@@ -626,10 +632,10 @@ function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], lo
     }
   }
 
-  return <main className="collection-page"><div className="collection-head"><div><p>{"\u5de5\u4f5c\u7a7a\u95f4"}</p><h1>{title}</h1></div><button className="button primary" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u65b0\u5efa\u4f5c\u54c1"}</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></div><button onClick={() => setStatusFilter((value) => value === "all" ? "completed" : value === "completed" ? "failed" : value === "failed" ? "active" : "all")}>{statusLabels[statusFilter]}<CaretDown size={14} /></button><button disabled={!visibleTasks.length} onClick={toggleVisible}>{allVisibleSelected ? "\u53d6\u6d88\u5168\u9009" : "\u5168\u9009"}</button><button className="danger-action" disabled={!selectedCount || deleting} onClick={deleteSelected}><Trash size={14} />{deleting ? "\u5220\u9664\u4e2d" : "\u5220\u9664"}{selectedCount > 0 && <b>{selectedCount}</b>}</button><IconButton label="Refresh" onClick={onRefresh}><ClockCounterClockwise size={18} /></IconButton></div>{loading ? <div className="collection-empty"><span className="spinner" /><h2>{"\u6b63\u5728\u8bfb\u53d6"}</h2></div> : visibleTasks.length ? <div className="generation-list">{visibleTasks.map((task) => { const result = generationTaskToResult(task, models); const thumb = task.assets?.[0]?.url; const model = models.find((item) => item.id === task.model_id); const selected = selectedIds.has(task.id); return <article key={task.id} className={"generation-card " + (selected ? "selected" : "")}><button type="button" className="select-check" onClick={() => toggleSelected(task.id)} aria-label={selected ? "\u53d6\u6d88\u9009\u62e9" : "\u9009\u62e9\u4f5c\u54c1"}>{selected && <Check size={13} weight="bold" />}</button><button type="button" className="generation-open" onClick={() => thumb && onSelect?.(result)} disabled={!thumb}><span className="generation-thumb">{thumb ? <img src={thumb} alt="" /> : <Icon size={22} />}</span><div><strong>{task.prompt}</strong><span>{model?.name || task.model_id}</span><small>{task.created_at ? new Date(task.created_at).toLocaleString("zh-CN") : "-"}</small></div><b className={"task-status " + task.status}>{task.status === "completed" ? "\u6210\u529f" : task.status === "failed" ? "\u5931\u8d25" : task.status === "processing" ? "\u5904\u7406\u4e2d" : "\u6392\u961f\u4e2d"}</b></button></article>; })}</div> : <div className="collection-empty"><span><Icon size={28} /></span><h2>{"\u8fd9\u91cc\u8fd8\u6ca1\u6709\u5185\u5bb9"}</h2><p>{emptyText}</p><button className="button ghost" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u5f00\u59cb\u521b\u4f5c"}</button></div>}</main>;
+  return <main className="collection-page"><div className="collection-head"><div><p>{"\u5de5\u4f5c\u7a7a\u95f4"}</p><h1>{title}</h1></div><button className="button primary" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u65b0\u5efa\u4f5c\u54c1"}</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></div><button onClick={() => setStatusFilter((value) => value === "all" ? "completed" : value === "completed" ? "failed" : value === "failed" ? "active" : "all")}>{statusLabels[statusFilter]}<CaretDown size={14} /></button><button disabled={!visibleTasks.length} onClick={toggleVisible}>{allVisibleSelected ? "\u53d6\u6d88\u5168\u9009" : "\u5168\u9009"}</button><button className="danger-action" disabled={!selectedCount || deleting} onClick={deleteSelected}><Trash size={14} />{deleting ? "\u5220\u9664\u4e2d" : "\u5220\u9664"}{selectedCount > 0 && <b>{selectedCount}</b>}</button><IconButton label="Refresh" onClick={onRefresh}><ClockCounterClockwise size={18} /></IconButton></div>{loading ? <div className="collection-empty"><span className="spinner" /><h2>{"\u6b63\u5728\u8bfb\u53d6"}</h2></div> : visibleTasks.length ? <div className="generation-list">{visibleTasks.map((task) => { const result = generationTaskToResult(task, models); const thumb = task.assets?.[0]?.thumbnailUrl || task.assets?.[0]?.url; const model = models.find((item) => item.id === task.model_id); const selected = selectedIds.has(task.id); return <article key={task.id} className={"generation-card " + (selected ? "selected" : "")}><button type="button" className="select-check" onClick={() => toggleSelected(task.id)} aria-label={selected ? "\u53d6\u6d88\u9009\u62e9" : "\u9009\u62e9\u4f5c\u54c1"}>{selected && <Check size={13} weight="bold" />}</button><button type="button" className="generation-open" onClick={() => thumb && onSelect?.(result)} disabled={!thumb}><span className="generation-thumb">{thumb ? <img src={thumb} alt="" loading="lazy" decoding="async" /> : <Icon size={22} />}</span><div><strong>{task.prompt}</strong><span>{model?.name || task.model_id}</span><small>{task.created_at ? new Date(task.created_at).toLocaleString("zh-CN") : "-"}</small></div><b className={"task-status " + task.status}>{task.status === "completed" ? "\u6210\u529f" : task.status === "failed" ? "\u5931\u8d25" : task.status === "processing" ? "\u5904\u7406\u4e2d" : "\u6392\u961f\u4e2d"}</b></button></article>; })}</div> : <div className="collection-empty"><span><Icon size={28} /></span><h2>{"\u8fd9\u91cc\u8fd8\u6ca1\u6709\u5185\u5bb9"}</h2><p>{emptyText}</p><button className="button ghost" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"\u5f00\u59cb\u521b\u4f5c"}</button></div>}</main>;
 }
 
-function CreatorApp({ models }) {
+function CreatorApp({ models, profile, onCreditsChanged }) {
   const [view, setView] = useState("create");
   const [collapsed, setCollapsed] = useState(false);
   const [result, setResult] = useState(null);
@@ -682,6 +688,7 @@ function CreatorApp({ models }) {
   const generated = (nextResult, clientRequestId, completedTask) => {
     setResult(nextResult);
     setEditTurns([]);
+    if (Number.isFinite(Number(nextResult.creditsRemaining))) onCreditsChanged?.(Number(nextResult.creditsRemaining));
     setGenerationTasks((items) => [completedTask, ...items.filter((item) => item.id !== clientRequestId && item.id !== completedTask.id)]);
     loadTasks();
   };
@@ -692,6 +699,7 @@ function CreatorApp({ models }) {
   async function submitImageEdit({ instruction, sourceResult, referenceAsset }) {
     const model = models.find((item) => item.id === sourceResult?.modelId) || models.find((item) => item.name === sourceResult?.model) || models.find((item) => item.enabled) || models[0];
     if (!model) throw new Error("No available model for image editing");
+
     const clientRequestId = createClientRequestId();
     const createdAt = new Date().toISOString();
     const ratio = sourceResult?.ratio && sourceResult.ratio !== "-" ? sourceResult.ratio : model.ratios[0];
@@ -699,6 +707,7 @@ function CreatorApp({ models }) {
     const quality = sourceResult?.quality && sourceResult.quality !== "-" ? sourceResult.quality : model.qualities[0];
     const prompt = buildEditPrompt(sourceResult, editTurns, instruction);
     const creditCost = calculateCreditCost(model, quality, 1);
+    if ((profile?.credits ?? null) != null && profile.credits < creditCost) throw new Error(`\u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff1a\u5f53\u524d ${profile.credits}\uff0c\u672c\u6b21\u9700\u8981 ${creditCost}\u3002`);
     const pendingTask = {
       id: clientRequestId,
       model_id: model.id,
@@ -730,6 +739,7 @@ function CreatorApp({ models }) {
       const completedAt = new Date().toISOString();
       const completedTask = { ...pendingTask, id: payload.taskId, status: "completed", credit_cost: payload.creditCost, completed_at: completedAt, assets, local: false };
       const nextResult = { assets, imageUrl: assets[0].url, prompt, model: model.name, modelId: model.id, ratio, size, quality, taskId: payload.taskId, creditCost: payload.creditCost, creditsRemaining: payload.creditsRemaining, createdAt: new Date(completedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) };
+      if (Number.isFinite(Number(payload.creditsRemaining))) onCreditsChanged?.(Number(payload.creditsRemaining));
       setResult(nextResult);
       setGenerationTasks((items) => [completedTask, ...items.filter((item) => item.id !== clientRequestId && item.id !== completedTask.id)]);
       setEditTurns((turns) => turns.map((turn) => turn.id === clientRequestId ? { ...turn, status: "completed", taskId: payload.taskId } : turn));
@@ -744,7 +754,7 @@ function CreatorApp({ models }) {
   return (
     <div className="creator-layout">
       <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
-      {view === "create" && <><Canvas result={result} onClear={() => { setResult(null); setEditTurns([]); }} onEdit={submitImageEdit} editTurns={editTurns} /><PromptPanel models={models} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
+      {view === "create" && <><Canvas result={result} onClear={() => { setResult(null); setEditTurns([]); }} onEdit={submitImageEdit} editTurns={editTurns} /><PromptPanel models={models} availableCredits={profile?.credits ?? null} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
       {view === "library" && <LibraryView title="\u4f5c\u54c1\u5e93" emptyText="\u751f\u6210\u7684\u56fe\u50cf\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
       {view === "queue" && <LibraryView title="\u751f\u6210\u961f\u5217" emptyText="\u6ca1\u6709\u6392\u961f\u4e2d\u7684\u751f\u6210\u4efb\u52a1\u3002" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
     </div>
@@ -1026,7 +1036,7 @@ export function App() {
   return (
     <div className="app-shell">
       <Header isAdmin={isAdmin} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
-      {isAdmin ? <AdminApp models={models} setModels={setModels} onRefreshModels={loadModels} /> : <CreatorApp models={models} />}
+      {isAdmin ? <AdminApp models={models} setModels={setModels} onRefreshModels={loadModels} /> : <CreatorApp models={models} profile={profile} onCreditsChanged={(credits) => setProfile((current) => current ? { ...current, credits } : current)} />}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   );

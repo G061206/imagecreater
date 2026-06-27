@@ -310,6 +310,39 @@ async function readImage(value, signal) {
 }
 
 const extensionFor = (mimeType) => ({ "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" })[mimeType];
+const CREDIT_MULTIPLIERS = { "\u6807\u51c6": 1, "\u9ad8\u6e05": 2, "\u8d85\u9ad8\u6e05": 4 };
+
+class GenerationUserStateError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "GenerationUserStateError";
+    this.code = "INSUFFICIENT_CREDITS_OR_INACTIVE";
+    this.status = 402;
+    this.details = details;
+  }
+}
+
+async function describeCreditGateFailure(userId, input) {
+  const [{ data: profile }, { data: model }] = await Promise.all([
+    supabaseAdmin.from("profiles").select("credits,status").eq("id", userId).maybeSingle(),
+    supabaseAdmin.from("ai_models").select("credit_cost").eq("id", input.modelId).maybeSingle(),
+  ]);
+  const multiplier = CREDIT_MULTIPLIERS[input.quality] || 1;
+  const requiredCredits = Number(model?.credit_cost || 0) * multiplier * input.count;
+  if (!profile) {
+    return { message: "\u8d26\u6237\u8d44\u6599\u5c1a\u672a\u521d\u59cb\u5316\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55\u540e\u518d\u8bd5\u3002", details: { requiredCredits } };
+  }
+  if (profile.status !== "active") {
+    return {
+      message: "\u8d26\u6237\u5df2\u88ab\u6682\u505c\uff0c\u8bf7\u5148\u6062\u590d\u8d26\u6237\u72b6\u6001\u540e\u518d\u751f\u6210\u56fe\u50cf\u3002",
+      details: { credits: profile.credits, status: profile.status, requiredCredits },
+    };
+  }
+  return {
+    message: `\u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff1a\u5f53\u524d ${profile.credits ?? 0}\uff0c\u672c\u6b21\u9700\u8981 ${requiredCredits || "\u672a\u77e5"}\u3002`,
+    details: { credits: profile.credits, status: profile.status, requiredCredits },
+  };
+}
 
 async function reserve(userId, input) {
   const { data, error } = await supabaseAdmin.rpc("reserve_generation_task", {
@@ -319,6 +352,13 @@ async function reserve(userId, input) {
     p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null, client_request_id: input.clientRequestId || null, edit_source_task_id: input.editSourceTaskId || null, edit_instruction: input.editInstruction || null },
     p_image_count: input.count,
   });
+  if (error?.message?.includes("INSUFFICIENT_CREDITS_OR_INACTIVE")) {
+    const failure = await describeCreditGateFailure(userId, input).catch(() => ({
+      message: "\u8d26\u6237\u672a\u6fc0\u6d3b\u6216\u5269\u4f59\u79ef\u5206\u4e0d\u8db3\uff0c\u8bf7\u68c0\u67e5\u8d26\u6237\u72b6\u6001\u548c\u79ef\u5206\u4f59\u989d\u3002",
+      details: {},
+    }));
+    throw new GenerationUserStateError(failure.message, failure.details);
+  }
   if (error) throw new Error(error.message);
   return data;
 }
