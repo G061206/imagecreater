@@ -830,7 +830,7 @@ function CreatorApp({ models, profile, activeProject, globalSearchQuery = "", on
       <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
       {view === "create" && <><Canvas result={result} onClear={() => { setResult(null); setEditTurns([]); }} onEdit={submitImageEdit} editTurns={editTurns} /><PromptPanel models={models} availableCredits={profile?.credits ?? null} project={activeProject} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
       {view === "library" && <LibraryView title="作品库" emptyText="生成的图像会自动保存到这里。" icon={ImageIcon} tasks={scopedTasks} models={models} loading={tasksLoading} externalQuery={globalSearchQuery} project={activeProject} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
-      {view === "queue" && <LibraryView title="生成队列" emptyText="没有排队中的生成任务。" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly externalQuery={globalSearchQuery} projectName={projectName} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
+      {view === "queue" && <LibraryView title="生成队列" emptyText="没有排队中的生成任务。" icon={Queue} tasks={scopedTasks} models={models} loading={tasksLoading} queueOnly externalQuery={globalSearchQuery} project={activeProject} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
     </div>
   );
 }
