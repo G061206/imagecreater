@@ -152,6 +152,34 @@ function readStorage(key, fallback) {
   }
 }
 
+const DEFAULT_PROJECT_ID = "default";
+
+function createProjectId() {
+  return "project-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+function normalizeProjects(value, fallbackName = "未命名项目") {
+  const now = new Date().toISOString();
+  const fallbackProject = { id: DEFAULT_PROJECT_ID, name: fallbackName || "未命名项目", createdAt: now, updatedAt: now };
+  if (!Array.isArray(value) || !value.length) return [fallbackProject];
+  const seen = new Set();
+  const projects = value.map((project, index) => ({
+    id: String(project?.id || (index === 0 ? DEFAULT_PROJECT_ID : createProjectId())),
+    name: String(project?.name || fallbackName || "未命名项目").trim().slice(0, 40) || "未命名项目",
+    createdAt: project?.createdAt || now,
+    updatedAt: project?.updatedAt || now,
+  })).filter((project) => {
+    if (seen.has(project.id)) return false;
+    seen.add(project.id);
+    return true;
+  });
+  return projects.length ? projects : [fallbackProject];
+}
+
+function projectIdForTask(task) {
+  return task?.parameters?.project_id || DEFAULT_PROJECT_ID;
+}
+
 function appNotify(message, type = "info") {
   window.dispatchEvent(new CustomEvent("prism:notify", { detail: { message, type } }));
 }
@@ -254,6 +282,8 @@ function generationTaskToResult(task, models) {
     prompt: task.prompt,
     model: model?.name || task.model_id,
     modelId: task.model_id,
+    projectId: parameters.project_id || DEFAULT_PROJECT_ID,
+    projectName: parameters.project_name || "未命名项目",
     ratio: parameters.ratio || "-",
     size: parameters.size || "-",
     quality: parameters.quality || "-",
@@ -291,23 +321,54 @@ function AccountMenu({ open, onClose, onAdmin, onCreator, isAdmin, canAdmin, pro
   );
 }
 
-function Header({ isAdmin, onAdmin, onCreator, role, profile, user, onSignOut, onProfileUpdated }) {
+function Header({ isAdmin, projects = [], activeProjectId, onProjectChange, onProjectCreate, onProjectRename, onGlobalSearch, onAdmin, onCreator, role, profile, user, onSignOut, onProfileUpdated }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState(false);
+  const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0] || { id: DEFAULT_PROJECT_ID, name: "未命名项目" };
+  const [draftProjectName, setDraftProjectName] = useState(activeProject.name || "未命名项目");
+  const [searchText, setSearchText] = useState("");
+  const searchRef = useRef(null);
   const initial = (profile?.full_name || user?.email || "U")[0].toUpperCase();
+
+  useEffect(() => { setDraftProjectName(activeProject.name || "未命名项目"); setEditingProject(false); }, [activeProject.id, activeProject.name]);
+  useEffect(() => {
+    function focusSearch(event) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && !isAdmin) {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, [isAdmin]);
+
+  function saveProjectName() {
+    const nextName = draftProjectName.trim().slice(0, 40) || "未命名项目";
+    setDraftProjectName(nextName);
+    setEditingProject(false);
+    onProjectRename?.(activeProject.id, nextName);
+  }
+
+  function submitSearch(event) {
+    event.preventDefault();
+    onGlobalSearch?.(searchText.trim());
+  }
+
   return (
     <header className="topbar">
       <div className="top-left">
         <Brand />
         <span className="top-divider" />
-        <strong className="workspace-title">{isAdmin ? "管理中心" : "未命名项目"}</strong>
+        {isAdmin ? <strong className="workspace-title">管理中心</strong> : <div className="project-switcher"><button className="workspace-title workspace-title-button" onClick={() => setProjectOpen((value) => !value)} title="项目空间">{activeProject.name || "未命名项目"}<CaretDown size={13} /></button>{projectOpen && <div className="project-menu"><div className="project-menu-head"><span>当前项目</span>{editingProject ? <input value={draftProjectName} autoFocus maxLength={40} onChange={(event) => setDraftProjectName(event.target.value)} onBlur={saveProjectName} onKeyDown={(event) => { if (event.key === "Enter") saveProjectName(); if (event.key === "Escape") { setDraftProjectName(activeProject.name || "未命名项目"); setEditingProject(false); } }} /> : <strong>{activeProject.name || "未命名项目"}</strong>}</div><div className="project-list">{projects.map((project) => <button key={project.id} className={project.id === activeProject.id ? "active" : ""} onClick={() => { onProjectChange?.(project.id); setProjectOpen(false); }}>{project.id === activeProject.id ? <Check size={14} weight="bold" /> : <Layout size={14} />}<span>{project.name}</span></button>)}</div><button className="project-action" onClick={() => setEditingProject(true)}><DotsThree size={15} />重命名当前项目</button><button className="project-action" onClick={() => { onProjectCreate?.(); setProjectOpen(false); }}><Plus size={15} />新建项目</button></div>}</div>}
       </div>
       {!isAdmin && (
-        <label className="global-search">
+        <form className="global-search" onSubmit={submitSearch}>
           <MagnifyingGlass size={18} />
-          <input placeholder="搜索作品、提示词或项目" />
-          <kbd>⌘ K</kbd>
-        </label>
+          <input ref={searchRef} value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索作品、提示词或项目" />
+          <kbd>Ctrl K</kbd>
+        </form>
       )}
       <div className="top-actions">
         <IconButton label="帮助" onClick={() => appNotify("Help is available in README.md and the API settings page.")}><Question size={20} /></IconButton>
@@ -360,7 +421,7 @@ function SelectField({ label, value, children, onChange }) {
   );
 }
 
-function PromptPanel({ models, availableCredits = null, onQueued, onGenerated, onFailed }) {
+function PromptPanel({ models, availableCredits = null, project, onQueued, onGenerated, onFailed }) {
   const activeModels = models.filter((model) => model.enabled);
   const [modelId, setModelId] = useState(activeModels[0]?.id || "");
   const model = activeModels.find((item) => item.id === modelId) || activeModels[0] || DEFAULT_MODELS[0];
@@ -439,13 +500,15 @@ function PromptPanel({ models, availableCredits = null, onQueued, onGenerated, o
       referenceImages,
       negativePrompt: negative,
       clientRequestId,
+      projectId: project?.id || DEFAULT_PROJECT_ID,
+      projectName: project?.name || "未命名项目",
       ...(seed ? { seed: Number(seed) } : {}),
     };
     const pendingTask = {
       id: clientRequestId,
       model_id: model.id,
       prompt: trimmedPrompt,
-      parameters: { ratio, size, quality, reference_count: referenceImages.length, negative_prompt: negative || null, seed: seed ? Number(seed) : null, client_request_id: clientRequestId },
+      parameters: { ratio, size, quality, reference_count: referenceImages.length, negative_prompt: negative || null, seed: seed ? Number(seed) : null, client_request_id: clientRequestId, project_id: project?.id || DEFAULT_PROJECT_ID, project_name: project?.name || "未命名项目" },
       image_count: count,
       status: "processing",
       credit_cost: estimatedCreditCost,
@@ -579,22 +642,25 @@ function Canvas({ result, onClear, onEdit, editTurns = [] }) {
 }
 
 
-function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], loading = false, queueOnly = false, onSelect, onRefresh, onDelete }) {
-  const [query, setQuery] = useState("");
+function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], loading = false, queueOnly = false, externalQuery = "", project, onSelect, onRefresh, onDelete }) {
+  const [query, setQuery] = useState(externalQuery);
   const [statusFilter, setStatusFilter] = useState(queueOnly ? "active" : "all");
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [deleting, setDeleting] = useState(false);
   const normalized = query.trim().toLowerCase();
+  const normalizedProject = (project?.name || "").trim().toLowerCase();
   const visibleTasks = tasks.filter((task) => {
     const isActive = task.status === "processing" || task.status === "reserved";
     const matchesStatus = statusFilter === "all" || (statusFilter === "active" ? isActive : task.status === statusFilter);
-    const matchesQuery = !normalized || (task.prompt || "").toLowerCase().includes(normalized) || (task.model_id || "").toLowerCase().includes(normalized);
+    const matchesProject = normalized && normalizedProject.includes(normalized);
+    const matchesQuery = !normalized || matchesProject || (task.prompt || "").toLowerCase().includes(normalized) || (task.model_id || "").toLowerCase().includes(normalized);
     return matchesStatus && matchesQuery;
   });
   const selectedCount = selectedIds.size;
   const allVisibleSelected = visibleTasks.length > 0 && visibleTasks.every((task) => selectedIds.has(task.id));
   const statusLabels = { all: "全部状态", active: "队列中", completed: "已完成", failed: "失败" };
 
+  useEffect(() => { setQuery(externalQuery); }, [externalQuery]);
   useEffect(() => {
     setSelectedIds((current) => new Set([...current].filter((id) => tasks.some((task) => task.id === id))));
   }, [tasks]);
@@ -635,13 +701,14 @@ function LibraryView({ title, emptyText, icon: Icon, tasks = [], models = [], lo
   return <main className="collection-page"><div className="collection-head"><div><p>{"工作空间"}</p><h1>{title}</h1></div><button className="button primary" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"新建作品"}</button></div><div className="filter-row"><div className="filter-search"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" /></div><button onClick={() => setStatusFilter((value) => value === "all" ? "completed" : value === "completed" ? "failed" : value === "failed" ? "active" : "all")}>{statusLabels[statusFilter]}<CaretDown size={14} /></button><button disabled={!visibleTasks.length} onClick={toggleVisible}>{allVisibleSelected ? "取消全选" : "全选"}</button><button className="danger-action" disabled={!selectedCount || deleting} onClick={deleteSelected}><Trash size={14} />{deleting ? "删除中" : "删除"}{selectedCount > 0 && <b>{selectedCount}</b>}</button><IconButton label="Refresh" onClick={onRefresh}><ClockCounterClockwise size={18} /></IconButton></div>{loading ? <div className="collection-empty"><span className="spinner" /><h2>{"正在读取"}</h2></div> : visibleTasks.length ? <div className="generation-list">{visibleTasks.map((task) => { const result = generationTaskToResult(task, models); const thumb = task.assets?.[0]?.thumbnailUrl || task.assets?.[0]?.url; const model = models.find((item) => item.id === task.model_id); const selected = selectedIds.has(task.id); return <article key={task.id} className={"generation-card " + (selected ? "selected" : "")}><button type="button" className="select-check" onClick={() => toggleSelected(task.id)} aria-label={selected ? "取消选择" : "选择作品"}>{selected && <Check size={13} weight="bold" />}</button><button type="button" className="generation-open" onClick={() => thumb && onSelect?.(result)} disabled={!thumb}><span className="generation-thumb">{thumb ? <img src={thumb} alt="" loading="lazy" decoding="async" /> : <Icon size={22} />}</span><div><strong>{task.prompt}</strong><span>{model?.name || task.model_id}</span><small>{task.created_at ? new Date(task.created_at).toLocaleString("zh-CN") : "-"}</small></div><b className={"task-status " + task.status}>{task.status === "completed" ? "成功" : task.status === "failed" ? "失败" : task.status === "processing" ? "处理中" : "排队中"}</b></button></article>; })}</div> : <div className="collection-empty"><span><Icon size={28} /></span><h2>{"这里还没有内容"}</h2><p>{emptyText}</p><button className="button ghost" onClick={() => window.dispatchEvent(new CustomEvent("prism:set-view", { detail: "create" }))}><Plus size={17} />{"开始创作"}</button></div>}</main>;
 }
 
-function CreatorApp({ models, profile, onCreditsChanged }) {
+function CreatorApp({ models, profile, activeProject, globalSearchQuery = "", onProjectsDiscovered, onCreditsChanged }) {
   const [view, setView] = useState("create");
   const [collapsed, setCollapsed] = useState(false);
   const [result, setResult] = useState(null);
   const [editTurns, setEditTurns] = useState([]);
   const [generationTasks, setGenerationTasks] = useState([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const activeProjectId = activeProject?.id || DEFAULT_PROJECT_ID;
 
   function isClientTaskId(id) {
     return String(id).startsWith("client-");
@@ -660,6 +727,8 @@ function CreatorApp({ models, profile, onCreditsChanged }) {
     try {
       const payload = await fetchWithAuth("/api/generations");
       const remoteTasks = payload.tasks || [];
+      const discoveredProjects = remoteTasks.map((task) => ({ id: task.parameters?.project_id, name: task.parameters?.project_name })).filter((project) => project.id && project.name);
+      if (discoveredProjects.length) onProjectsDiscovered?.(discoveredProjects);
       const remoteClientIds = new Set(remoteTasks.map((task) => task.parameters?.client_request_id).filter(Boolean));
       setGenerationTasks((current) => [
         ...current.filter((task) => isClientTaskId(task.id) && !remoteClientIds.has(task.id)),
@@ -673,13 +742,18 @@ function CreatorApp({ models, profile, onCreditsChanged }) {
   }
 
   useEffect(() => { loadTasks(); }, []);
+  useEffect(() => { setResult(null); setEditTurns([]); }, [activeProjectId]);
+  useEffect(() => {
+    if (globalSearchQuery.trim()) setView("library");
+  }, [globalSearchQuery]);
   useEffect(() => {
     function switchView(event) { setView(event.detail || "create"); }
     window.addEventListener("prism:set-view", switchView);
     return () => window.removeEventListener("prism:set-view", switchView);
   }, []);
 
-  const queueCount = generationTasks.filter((task) => task.status === "processing" || task.status === "reserved").length;
+  const scopedTasks = generationTasks.filter((task) => projectIdForTask(task) === activeProjectId);
+  const queueCount = scopedTasks.filter((task) => task.status === "processing" || task.status === "reserved").length;
   const selectTask = (taskResult) => { setResult(taskResult); setEditTurns([]); setView("create"); };
   const queued = (task) => {
     setGenerationTasks((items) => [task, ...items.filter((item) => item.id !== task.id)]);
@@ -712,7 +786,7 @@ function CreatorApp({ models, profile, onCreditsChanged }) {
       id: clientRequestId,
       model_id: model.id,
       prompt,
-      parameters: { ratio, size, quality, reference_count: 1, edit_source_task_id: sourceResult?.taskId || null, edit_instruction: instruction, client_request_id: clientRequestId },
+      parameters: { ratio, size, quality, reference_count: 1, edit_source_task_id: sourceResult?.taskId || null, edit_instruction: instruction, client_request_id: clientRequestId, project_id: activeProject?.id || DEFAULT_PROJECT_ID, project_name: activeProject?.name || "未命名项目" },
       image_count: 1,
       status: "processing",
       credit_cost: creditCost,
@@ -730,7 +804,7 @@ function CreatorApp({ models, profile, onCreditsChanged }) {
       const response = await fetch("/api/generations", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-        body: JSON.stringify({ modelId: model.id, prompt, ratio, size, quality, count: 1, referenceImages: [referenceAsset.url], negativePrompt: "", clientRequestId, editSourceTaskId: sourceResult?.taskId, editInstruction: instruction }),
+        body: JSON.stringify({ modelId: model.id, prompt, ratio, size, quality, count: 1, referenceImages: [referenceAsset.url], negativePrompt: "", clientRequestId, editSourceTaskId: sourceResult?.taskId, editInstruction: instruction, projectId: activeProject?.id || DEFAULT_PROJECT_ID, projectName: activeProject?.name || "未命名项目" }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.error || "Request failed (" + response.status + ")");
@@ -754,9 +828,9 @@ function CreatorApp({ models, profile, onCreditsChanged }) {
   return (
     <div className="creator-layout">
       <CreatorSidebar view={view} setView={setView} collapsed={collapsed} setCollapsed={setCollapsed} queueCount={queueCount} />
-      {view === "create" && <><Canvas result={result} onClear={() => { setResult(null); setEditTurns([]); }} onEdit={submitImageEdit} editTurns={editTurns} /><PromptPanel models={models} availableCredits={profile?.credits ?? null} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
-      {view === "library" && <LibraryView title="作品库" emptyText="生成的图像会自动保存到这里。" icon={ImageIcon} tasks={generationTasks} models={models} loading={tasksLoading} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
-      {view === "queue" && <LibraryView title="生成队列" emptyText="没有排队中的生成任务。" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
+      {view === "create" && <><Canvas result={result} onClear={() => { setResult(null); setEditTurns([]); }} onEdit={submitImageEdit} editTurns={editTurns} /><PromptPanel models={models} availableCredits={profile?.credits ?? null} project={activeProject} onQueued={queued} onGenerated={generated} onFailed={failed} /></>}
+      {view === "library" && <LibraryView title="作品库" emptyText="生成的图像会自动保存到这里。" icon={ImageIcon} tasks={scopedTasks} models={models} loading={tasksLoading} externalQuery={globalSearchQuery} project={activeProject} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
+      {view === "queue" && <LibraryView title="生成队列" emptyText="没有排队中的生成任务。" icon={Queue} tasks={generationTasks} models={models} loading={tasksLoading} queueOnly externalQuery={globalSearchQuery} projectName={projectName} onSelect={selectTask} onRefresh={loadTasks} onDelete={deleteTasks} />}
     </div>
   );
 }
@@ -948,6 +1022,9 @@ export function App() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [models, setModels] = useState(() => readStorage("prism_models", DEFAULT_MODELS));
+  const [projects, setProjects] = useState(() => normalizeProjects(readStorage("prism_projects", null), readStorage("prism_project_name", "未命名项目")));
+  const [activeProjectId, setActiveProjectId] = useState(() => readStorage("prism_active_project_id", DEFAULT_PROJECT_ID));
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [toast, setToast] = useState(null);
 
   async function loadModels() {
@@ -1013,6 +1090,9 @@ export function App() {
   }, [session?.user?.id]);
 
   useEffect(() => { localStorage.setItem("prism_models", JSON.stringify(models)); }, [models]);
+  useEffect(() => { localStorage.setItem("prism_projects", JSON.stringify(projects)); }, [projects]);
+  useEffect(() => { localStorage.setItem("prism_active_project_id", JSON.stringify(activeProjectId)); }, [activeProjectId]);
+  useEffect(() => { if (!projects.some((project) => project.id === activeProjectId)) setActiveProjectId(projects[0]?.id || DEFAULT_PROJECT_ID); }, [projects, activeProjectId]);
   useEffect(() => {
     function showToast(event) {
       setToast({ ...(event.detail || {}), id: Date.now() });
@@ -1033,10 +1113,38 @@ export function App() {
 
   const role = profile.role;
   const isAdmin = mode === "admin";
+  const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0] || { id: DEFAULT_PROJECT_ID, name: "未命名项目" };
+  function createProject() {
+    const name = window.prompt("项目名称", "项目 " + (projects.length + 1));
+    const trimmed = name?.trim().slice(0, 40);
+    if (!trimmed) return;
+    const project = { id: createProjectId(), name: trimmed, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    setProjects((items) => [...items, project]);
+    setActiveProjectId(project.id);
+    setMode("creator");
+    setGlobalSearchQuery("");
+    appNotify("已创建项目");
+  }
+  function renameProject(id, name) {
+    setProjects((items) => items.map((project) => project.id === id ? { ...project, name, updatedAt: new Date().toISOString() } : project));
+  }
+  function changeProject(id) {
+    setActiveProjectId(id);
+    setMode("creator");
+    setGlobalSearchQuery("");
+    appNotify("已切换项目");
+  }
+  function mergeDiscoveredProjects(discoveredProjects) {
+    setProjects((items) => {
+      const existing = new Set(items.map((project) => project.id));
+      const additions = discoveredProjects.filter((project) => !existing.has(project.id)).map((project) => ({ id: project.id, name: String(project.name).slice(0, 40) || "未命名项目", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+      return additions.length ? [...items, ...additions] : items;
+    });
+  }
   return (
     <div className="app-shell">
-      <Header isAdmin={isAdmin} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
-      {isAdmin ? <AdminApp models={models} setModels={setModels} onRefreshModels={loadModels} /> : <CreatorApp models={models} profile={profile} onCreditsChanged={(credits) => setProfile((current) => current ? { ...current, credits } : current)} />}
+      <Header isAdmin={isAdmin} projects={projects} activeProjectId={activeProject.id} onProjectChange={changeProject} onProjectCreate={createProject} onProjectRename={renameProject} onGlobalSearch={setGlobalSearchQuery} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
+      {isAdmin ? <AdminApp models={models} setModels={setModels} onRefreshModels={loadModels} /> : <CreatorApp models={models} profile={profile} activeProject={activeProject} globalSearchQuery={globalSearchQuery} onProjectsDiscovered={mergeDiscoveredProjects} onCreditsChanged={(credits) => setProfile((current) => current ? { ...current, credits } : current)} />}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   );

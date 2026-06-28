@@ -14,6 +14,8 @@ export const generationSchema = z.object({
   negativePrompt: z.string().trim().max(1000).optional().default(""),
   seed: z.number().int().min(0).max(2147483647).optional(),
   clientRequestId: z.string().min(1).max(100).regex(/^client-[A-Za-z0-9-]+$/).optional(),
+  projectId: z.string().min(1).max(120).optional(),
+  projectName: z.string().trim().max(80).optional(),
   editSourceTaskId: z.string().uuid().optional(),
   editInstruction: z.string().trim().max(1000).optional(),
 });
@@ -349,7 +351,7 @@ async function reserve(userId, input) {
     p_user_id: userId,
     p_model_id: input.modelId,
     p_prompt: input.prompt,
-    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null, client_request_id: input.clientRequestId || null, edit_source_task_id: input.editSourceTaskId || null, edit_instruction: input.editInstruction || null },
+    p_parameters: { ratio: input.ratio, size: input.size, quality: input.quality, reference_count: input.referenceImages?.length || 0, negative_prompt: input.negativePrompt || null, seed: input.seed ?? null, client_request_id: input.clientRequestId || null, project_id: input.projectId || null, project_name: input.projectName || null, edit_source_task_id: input.editSourceTaskId || null, edit_instruction: input.editInstruction || null },
     p_image_count: input.count,
   });
   if (error?.message?.includes("INSUFFICIENT_CREDITS_OR_INACTIVE")) {
