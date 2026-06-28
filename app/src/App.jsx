@@ -321,7 +321,7 @@ function AccountMenu({ open, onClose, onAdmin, onCreator, isAdmin, canAdmin, pro
   );
 }
 
-function Header({ isAdmin, projects = [], activeProjectId, onProjectChange, onProjectCreate, onProjectRename, onGlobalSearch, onAdmin, onCreator, role, profile, user, onSignOut, onProfileUpdated }) {
+function Header({ isAdmin, projects = [], activeProjectId, onProjectChange, onProjectCreate, onProjectRename, onProjectDelete, onGlobalSearch, onAdmin, onCreator, role, profile, user, onSignOut, onProfileUpdated }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
@@ -361,7 +361,7 @@ function Header({ isAdmin, projects = [], activeProjectId, onProjectChange, onPr
       <div className="top-left">
         <Brand />
         <span className="top-divider" />
-        {isAdmin ? <strong className="workspace-title">管理中心</strong> : <div className="project-switcher"><button className="workspace-title workspace-title-button" onClick={() => setProjectOpen((value) => !value)} title="项目空间">{activeProject.name || "未命名项目"}<CaretDown size={13} /></button>{projectOpen && <div className="project-menu"><div className="project-menu-head"><span>当前项目</span>{editingProject ? <input value={draftProjectName} autoFocus maxLength={40} onChange={(event) => setDraftProjectName(event.target.value)} onBlur={saveProjectName} onKeyDown={(event) => { if (event.key === "Enter") saveProjectName(); if (event.key === "Escape") { setDraftProjectName(activeProject.name || "未命名项目"); setEditingProject(false); } }} /> : <strong>{activeProject.name || "未命名项目"}</strong>}</div><div className="project-list">{projects.map((project) => <button key={project.id} className={project.id === activeProject.id ? "active" : ""} onClick={() => { onProjectChange?.(project.id); setProjectOpen(false); }}>{project.id === activeProject.id ? <Check size={14} weight="bold" /> : <Layout size={14} />}<span>{project.name}</span></button>)}</div><button className="project-action" onClick={() => setEditingProject(true)}><DotsThree size={15} />重命名当前项目</button><button className="project-action" onClick={() => { onProjectCreate?.(); setProjectOpen(false); }}><Plus size={15} />新建项目</button></div>}</div>}
+        {isAdmin ? <strong className="workspace-title">管理中心</strong> : <div className="project-switcher"><button className="workspace-title workspace-title-button" onClick={() => setProjectOpen((value) => !value)} title="项目空间">{activeProject.name || "未命名项目"}<CaretDown size={13} /></button>{projectOpen && <div className="project-menu"><div className="project-menu-head"><span>当前项目</span>{editingProject ? <input value={draftProjectName} autoFocus maxLength={40} onChange={(event) => setDraftProjectName(event.target.value)} onBlur={saveProjectName} onKeyDown={(event) => { if (event.key === "Enter") saveProjectName(); if (event.key === "Escape") { setDraftProjectName(activeProject.name || "未命名项目"); setEditingProject(false); } }} /> : <strong>{activeProject.name || "未命名项目"}</strong>}</div><div className="project-list">{projects.map((project) => <button key={project.id} className={project.id === activeProject.id ? "active" : ""} onClick={() => { onProjectChange?.(project.id); setProjectOpen(false); }}>{project.id === activeProject.id ? <Check size={14} weight="bold" /> : <Layout size={14} />}<span>{project.name}</span></button>)}</div><button className="project-action" onClick={() => setEditingProject(true)}><DotsThree size={15} />重命名当前项目</button><button className="project-action" onClick={() => { onProjectCreate?.(); setProjectOpen(false); }}><Plus size={15} />新建项目</button><button className="project-action danger" disabled={projects.length <= 1} onClick={() => { onProjectDelete?.(activeProject.id); setProjectOpen(false); }}><Trash size={15} />删除当前项目</button></div>}</div>}
       </div>
       {!isAdmin && (
         <form className="global-search" onSubmit={submitSearch}>
@@ -1134,6 +1134,21 @@ export function App() {
     setGlobalSearchQuery("");
     appNotify("已切换项目");
   }
+  function deleteProject(id) {
+    if (projects.length <= 1) {
+      appNotify("至少保留一个项目", "error");
+      return;
+    }
+    const target = projects.find((project) => project.id === id);
+    if (!target) return;
+    if (!window.confirm(`确定删除项目“${target.name}”吗？项目内已有作品文件不会被删除。`)) return;
+    const nextProjects = projects.filter((project) => project.id !== id);
+    setProjects(nextProjects);
+    if (activeProjectId === id) setActiveProjectId(nextProjects[0]?.id || DEFAULT_PROJECT_ID);
+    setMode("creator");
+    setGlobalSearchQuery("");
+    appNotify("已删除项目");
+  }
   function mergeDiscoveredProjects(discoveredProjects) {
     setProjects((items) => {
       const existing = new Set(items.map((project) => project.id));
@@ -1143,7 +1158,7 @@ export function App() {
   }
   return (
     <div className="app-shell">
-      <Header isAdmin={isAdmin} projects={projects} activeProjectId={activeProject.id} onProjectChange={changeProject} onProjectCreate={createProject} onProjectRename={renameProject} onGlobalSearch={setGlobalSearchQuery} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
+      <Header isAdmin={isAdmin} projects={projects} activeProjectId={activeProject.id} onProjectChange={changeProject} onProjectCreate={createProject} onProjectRename={renameProject} onProjectDelete={deleteProject} onGlobalSearch={setGlobalSearchQuery} role={role} profile={profile} user={session.user} onProfileUpdated={setProfile} onSignOut={() => supabase.auth.signOut()} onAdmin={() => { if (role === "admin") setMode("admin"); }} onCreator={() => setMode("creator")} />
       {isAdmin ? <AdminApp models={models} setModels={setModels} onRefreshModels={loadModels} /> : <CreatorApp models={models} profile={profile} activeProject={activeProject} globalSearchQuery={globalSearchQuery} onProjectsDiscovered={mergeDiscoveredProjects} onCreditsChanged={(credits) => setProfile((current) => current ? { ...current, credits } : current)} />}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>

@@ -91,6 +91,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .project-list button:hover, .project-action:hover { background: #27272c; color: white; }
 .project-list button.active { background: #2a2a35; color: white; }
 .project-action { border-top: 1px solid #2a2a2f; border-radius: 0; }
+.project-action.danger { color: #ff9aaa; }
+.project-action.danger:hover:not(:disabled) { background: #3a2026; color: #ffd6dd; }
+.project-action:disabled { opacity: .45; cursor: not-allowed; }
 .global-search { height: 39px; border-radius: 12px; background: #18181b; border: 1px solid #242428; display: flex; align-items: center; gap: 9px; padding: 0 12px; color: #8f8f98; }
 .global-search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: #eee; font-size: 13px; }
 .global-search kbd { font-size: 11px; border: 1px solid #35353a; border-radius: 5px; padding: 2px 5px; color: #777780; }
